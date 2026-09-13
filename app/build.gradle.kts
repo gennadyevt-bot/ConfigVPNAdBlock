@@ -9,7 +9,7 @@ android {
     defaultConfig {
         applicationId = "com.config.app"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 32
         versionName = "5.1.1"
     }
