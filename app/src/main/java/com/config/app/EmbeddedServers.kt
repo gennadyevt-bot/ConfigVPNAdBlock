@@ -2,14 +2,12 @@ package com.config.app
 
 import android.content.Context
 
-// Встроенные (зашитые) read-only серверы: лежат в assets как обычные .conf,
-// отображаются как "Profile 1/2/3". Доступны и в главном списке, и в App VPN.
+// Встроенный (зашитый) read-only сервер: лежит в assets как обычный .conf,
+// отображается как "Profile 1". Доступен и в главном списке, и в App VPN.
 object EmbeddedServers {
 
     private val builtin = listOf(
-        "warp1.conf" to "Profile 1",
-        "warp2.conf" to "Profile 2",
-        "warp3.conf" to "Profile 3"
+        "server1.conf" to "Profile 1"
     )
 
     fun load(context: Context): List<ServerInfo> {
@@ -23,6 +21,5 @@ object EmbeddedServers {
         }.filterNotNull()
     }
 
-    // Полный список для выбора: встроенные + пользовательские
     fun all(context: Context): List<ServerInfo> = load(context) + ServerStorage(context).loadServers()
 }
