@@ -45,11 +45,11 @@ jobs:
     - name: Decode upload keystore (если задан секрет)
       run: |
         if [ -n "${{ secrets.UPLOAD_KEYSTORE_BASE64 }}" ]; then
-          echo "${{ secrets.UPLOAD_KEYSTORE_BASE64 }}" | base64 -d > upload-keystore.jks
+          echo "${{ secrets.UPLOAD_KEYSTORE_BASE64 }}" | base64 -d > app/upload-keystore.jks
         fi
     - name: Build release AAB (для Google Play)
       env:
-        UPLOAD_KEYSTORE_PATH: upload-keystore.jks
+        UPLOAD_KEYSTORE_PATH: app/upload-keystore.jks
         UPLOAD_STORE_PASSWORD: ${{ secrets.UPLOAD_STORE_PASSWORD }}
         UPLOAD_KEY_ALIAS: configvpn-upload
         UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
