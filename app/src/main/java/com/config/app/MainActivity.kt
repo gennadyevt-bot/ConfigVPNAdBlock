@@ -183,7 +183,7 @@ class MainActivity : AppCompatActivity() {
             embeddedIds.add(emb.id)
         }
 
-        // Пользовательские слоты (до 3) — с миграцией: убираем из хранилища
+        // Пользовательские слоты (до 5) — с миграцией: убираем из хранилища
         // дубликаты встроенных конфигов (сохранённые тестовой сборкой)
         val saved = serverStorage.loadServers().filter { userSrv ->
             embeddedIds.none { embId ->
@@ -191,11 +191,11 @@ class MainActivity : AppCompatActivity() {
                 emb != null && emb.interfacePrivateKey == userSrv.interfacePrivateKey
             }
         }.toMutableList()
-        while (saved.size < 3) {
+        while (saved.size < 5) {
             saved.add(ServerInfo(id = "user_${saved.size}", name = "Empty Slot"))
         }
-        servers.addAll(saved.take(3))
-        serverStorage.saveServers(saved.take(3))
+        servers.addAll(saved.take(5))
+        serverStorage.saveServers(saved.take(5))
     }
 
     private fun saveUserServers() {
