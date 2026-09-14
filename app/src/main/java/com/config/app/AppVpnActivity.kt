@@ -53,6 +53,7 @@ class AppVpnActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_app_vpn)
+        applyReleaseInsets()
 
         appVpnStorage = AppVpnStorage(this)
 
@@ -301,7 +302,7 @@ class AppVpnActivity : AppCompatActivity() {
     private fun showPermissionDialog() {
         AlertDialog.Builder(this)
             .setTitle("Разрешение")
-            .setMessage("App VPN нужен доступ к Usage Stats. Включите в настройках.")
+            .setMessage("App VPN читает список запускаемых приложений и статистику их использования, чтобы автоматически включать VPN для выбранных вами приложений. Обработка выполняется на устройстве; список и история использования не отправляются разработчику. Доступ можно отозвать в настройках Android. Продолжить?")
             .setPositiveButton("Настройки") { _, _ -> startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
             .setNegativeButton("Отмена") { _, _ -> finish() }
             .setCancelable(false)

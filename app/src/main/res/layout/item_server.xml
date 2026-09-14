@@ -55,7 +55,7 @@
             android:padding="8dp"
             android:src="@android:drawable/ic_input_add"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:tint="#32CD32"
+            app:tint="#32CD32"
             android:contentDescription="Add config"
             android:clickable="true"
             android:focusable="true"

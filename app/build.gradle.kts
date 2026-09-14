@@ -9,9 +9,9 @@ android {
     defaultConfig {
         applicationId = "com.config.app"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 36
-        versionName = "5.1.5"
+        targetSdk = 36
+        versionCode = 37
+        versionName = "5.1.6"
     }
 
     signingConfigs {
@@ -28,8 +28,8 @@ android {
     }
 
     lint {
-        abortOnError = false
-        checkReleaseBuilds = false
+        abortOnError = true
+        checkReleaseBuilds = true
     }
 
     buildTypes {
@@ -47,6 +47,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
 
     implementation("com.zaneschepke:amneziawg-android:2.3.7")
     implementation("com.wireguard.android:tunnel:1.0.20260102")

@@ -34,7 +34,7 @@ object OwnServerSetup {
                 }
                 Toast.makeText(context, "Настройка сервера, жди 1–2 минуты...", Toast.LENGTH_LONG).show()
                 Thread {
-                    val result = runSetup(host, port, user, pass)
+                    val result = runSetup(context, host, port, user, pass)
                     Handler(Looper.getMainLooper()).post {
                         result.onSuccess { config ->
                             val info = parseConfigToInfo(config, "Свой сервер", "own")
@@ -88,13 +88,44 @@ object OwnServerSetup {
         )
     }
 
-    private fun runSetup(host: String, port: Int, user: String, pass: String): Result<String> {
+    private fun runSetup(context: Context, host: String, port: Int, user: String, pass: String): Result<String> {
         return try {
+            require(host.matches(Regex("[A-Za-z0-9.-]+"))) { "Укажите IPv4 или DNS-имя сервера без пробелов и команд" }
+            require(port in 1..65535) { "Неверный порт SSH" }
             val jsch = JSch()
+            val knownHosts = java.io.File(context.filesDir, "ssh_known_hosts")
+            if (!knownHosts.exists()) knownHosts.createNewFile()
+            jsch.setKnownHosts(knownHosts.absolutePath)
             val session = jsch.getSession(user, host, port)
             session.setPassword(pass)
+            session.userInfo = object : com.jcraft.jsch.UserInfo {
+                override fun getPassword(): String? = null
+                override fun getPassphrase(): String? = null
+                override fun promptPassword(message: String?): Boolean = false
+                override fun promptPassphrase(message: String?): Boolean = false
+                override fun showMessage(message: String?) {}
+                override fun promptYesNo(message: String?): Boolean {
+                    val result = java.util.concurrent.atomic.AtomicBoolean(false)
+                    val latch = java.util.concurrent.CountDownLatch(1)
+                    Handler(Looper.getMainLooper()).post {
+                        val activity = context as? android.app.Activity
+                        if (activity == null || activity.isFinishing || activity.isDestroyed) {
+                            latch.countDown()
+                        } else {
+                            AlertDialog.Builder(context)
+                                .setTitle("Проверка SSH-сервера")
+                                .setMessage("Сверьте отпечаток с панелью вашего сервера. Подтверждайте только известный вам сервер.\n\n" + message)
+                                .setPositiveButton("Доверять") { _, _ -> result.set(true); latch.countDown() }
+                                .setNegativeButton("Отмена") { _, _ -> latch.countDown() }
+                                .setOnCancelListener { latch.countDown() }
+                                .show()
+                        }
+                    }
+                    return latch.await(120, java.util.concurrent.TimeUnit.SECONDS) && result.get()
+                }
+            }
             val cfg = java.util.Properties()
-            cfg["StrictHostKeyChecking"] = "no"
+            cfg["StrictHostKeyChecking"] = "ask"
             session.setConfig(cfg)
             session.timeout = 20000
             session.connect()

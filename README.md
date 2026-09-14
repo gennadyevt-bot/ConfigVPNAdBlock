@@ -4,21 +4,21 @@
 
 ---
 
-## ⬇ Скачать
+## Сборки
 
-| Версия | Ссылка |
-|---|---|
-| **v4.7.11** (последняя, тестовая) | [Config_v4.7.11.apk](https://github.com/gennadyevt-bot/Config_dns/releases/download/v4.7.11/Config_v4.7.11.apk) |
-| v4.7.10 | [Config_v4.7.10.apk](https://github.com/gennadyevt-bot/Config_dns/releases/download/v4.7.10/Config_v4.7.10.apk) |
-| v4.7.9 | [Config_v4.7.9.apk](https://github.com/gennadyevt-bot/Config_dns/releases/download/v4.7.9/Config_v4.7.9.apk) |
-| v4.7.8 | [Config_v4.7.8.apk](https://github.com/gennadyevt-bot/Config_dns/releases/download/v4.7.8/Config_v4.7.8.apk) |
-| v4.7.7 | [Config_v4.7.7.apk](https://github.com/gennadyevt-bot/Config_dns/releases/download/v4.7.7/Config_v4.7.7.apk) |
-| v4.7.6 | [Config_v4.7.6.apk](https://github.com/gennadyevt-bot/Config_dns/releases/download/v4.7.6/Config_v4.7.6.apk) |
-| v4.7.5 | [Config_v4.7.5.apk](https://github.com/gennadyevt-bot/Config_dns/releases/download/v4.7.5/Config_v4.7.5.apk) |
-| v4.6.0 | [Config_v4.6.0.apk](https://github.com/gennadyevt-bot/Config_dns/releases/download/v4.6.0/Config_v4.6.0.apk) |
+Текущая версия: **5.1.6 (37)**, пакет релиза `com.config.app`, Android 7.0+ (API 24), target/compile SDK 36.
 
----
+В [GitHub Actions](https://github.com/gennadyevt-bot/Config_dns/actions/workflows/android.yml) выберите успешный запуск для последнего коммита:
+- `configvpn-signed-release`: APK для установки и AAB для Google Play, подписанные постоянным ключом Config VPN, отчёты проверки и SHA-256 файлов.
+- `configvpn-debug-verification`: отладочный APK с пакетом `com.config.app.debug` и отчёты тестов/Lint.
 
+Закрытый репозиторий требует входа в GitHub для скачивания артефактов. AAB напрямую на телефон не устанавливается. Предыдущие APK с debug-подписью могут не обновиться до release APK; сначала экспортируйте профили и сохраните их безопасно.
+
+Сборка: JDK 21+, Android SDK 36 и `./gradlew assembleDebug testDebugUnitTest lintDebug`. Подписанный релиз: `assembleRelease bundleRelease lintRelease` с переменными `UPLOAD_KEYSTORE_PATH`, `UPLOAD_STORE_PASSWORD`, `UPLOAD_KEY_PASSWORD`, `UPLOAD_KEY_ALIAS`. На подготовленном Windows-ПК: `scripts/build-release.ps1`. Ключи и пароли хранятся вне Git.
+
+CI использует Secrets `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`. Релиз создаётся после проверок при push в main и ручном запуске; pull request выполняет только проверки без секретов подписи. Сертификат релиза сверяется с постоянным сертификатом Config VPN.
+
+Материалы магазина и незавершённые проверки перечислены в [docs/google-play/submission-checklist.md](docs/google-play/submission-checklist.md). Успешная сборка не заменяет тест VPN на устройстве и проверку владельцем перед отправкой в Google Play.
 ## 📘 Быстрый старт
 
 ### 1. Установка и первый запуск
@@ -75,7 +75,7 @@
 ## 🛠 Технологии
 
 - Kotlin, WireGuard/AmneziaWG, AndroidX
-- compileSdk 34, minSdk 24
+- compileSdk 36, targetSdk 36, minSdk 24
 - CI/CD: GitHub Actions
 
 ---

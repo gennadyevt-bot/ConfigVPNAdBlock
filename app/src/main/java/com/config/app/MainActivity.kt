@@ -94,6 +94,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        applyReleaseInsets()
 
         vpnManager = VpnManager.getInstance(this)
         serverStorage = ServerStorage(this)
@@ -259,6 +260,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestVpnPermissionAndConnect(server: ServerInfo) {
+        val consent = getSharedPreferences("privacy_consent", MODE_PRIVATE)
+        if (!consent.getBoolean("vpn_v1", false)) {
+            AlertDialog.Builder(this)
+                .setTitle("Подключение VPN")
+                .setMessage("Config VPN направляет выбранный сетевой трафик через VPN-сервер и шифрует его до сервера по WireGuard или AmneziaWG. Оператор выбранного сервера может видеть ваш IP-адрес, адреса назначений и незашифрованный трафик. Используйте сервер, которому доверяете. Приложение хранит конфигурации и ключи на устройстве; экспорт резервной копии включает ключи. Продолжить?")
+                .setPositiveButton("Согласен") { _, _ ->
+                    consent.edit().putBoolean("vpn_v1", true).apply()
+                    requestVpnPermissionAndConnect(server)
+                }
+                .setNegativeButton("Отмена", null)
+                .show()
+            return
+        }
         val intent = vpnManager.getPrepareIntent(this)
         if (intent != null) {
             vpnPermissionLauncher.launch(intent)

@@ -108,7 +108,6 @@ class VpnManager private constructor(private val context: Context) {
                 // Конфиг с junk-параметрами (AmneziaWG) идёт через AWG-бэкенд —
                 // он обходит DPI РНК. Обычные конфиги — через WireGuard с App VPN.
                 val wantsAwg = server.jc.isNotEmpty() && server.jc != "0"
-0
                 if (wantsAwg) {
                     connectAwg(server, includedApps)
                 } else {
@@ -134,7 +133,6 @@ class VpnManager private constructor(private val context: Context) {
 
     private suspend fun connectWg(server: ServerInfo, includedApps: List<String>) {
         val configString = buildConfigString(server, includedApps, withAwg = false)
-        android.util.Log.d("ConfigVPN", "WG config: $configString")
 
         val config = WgConfig.parse(ByteArrayInputStream(configString.toByteArray()))
         currentWgConfig = config
@@ -168,8 +166,6 @@ class VpnManager private constructor(private val context: Context) {
     private suspend fun connectAwg(server: ServerInfo, includedApps: List<String>) {
         try {
             val configString = buildConfigString(server, includedApps, withAwg = true)
-            android.util.Log.d("ConfigVPN", "AWG config: $configString")
-            dbg("AWG config: " + configString.replace("\n", " | "))
 
             val config = AwgConfig.parse(ByteArrayInputStream(configString.toByteArray()))
             currentAwgConfig = config

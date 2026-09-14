@@ -10,6 +10,7 @@ class GuideActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_guide)
+        applyReleaseInsets()
 
         findViewById<ImageView>(R.id.ivBack).setOnClickListener { finish() }
 

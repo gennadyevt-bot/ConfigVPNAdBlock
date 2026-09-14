@@ -23,6 +23,7 @@ class DomainVpnActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_domain_vpn)
+        applyReleaseInsets()
 
         domainStorage = DomainVpnStorage(this)
         domains.addAll(domainStorage.getDomains().sorted())
@@ -64,25 +65,25 @@ class DomainVpnActivity : AppCompatActivity() {
 
         btnSave.setOnClickListener {
             val enabled = domains.isNotEmpty()
-            domainStorage.setEnabled(enabled)
             if (enabled) {
-                Toast.makeText(this, "Domain VPN enabled for " + domains.size + " sites", Toast.LENGTH_SHORT).show()
                 showAccessibilityDialog()
             } else {
+                domainStorage.setEnabled(false)
                 Toast.makeText(this, "Domain VPN disabled", Toast.LENGTH_SHORT).show()
+                finish()
             }
-            finish()
         }
     }
 
     private fun showAccessibilityDialog() {
         AlertDialog.Builder(this)
-            .setTitle("Accessibility Required")
-            .setMessage("To auto-enable VPN when visiting saved sites, please enable Config VPN Accessibility Service in system settings.")
-            .setPositiveButton("Open Settings") { _, _ ->
+            .setTitle("Доступ для Domain VPN")
+            .setMessage("Config VPN использует Accessibility для чтения адресов сайтов, ссылок и текста на экране браузеров и Telegram, а также имени активного приложения. Эти данные обрабатываются на устройстве, чтобы автоматически включать VPN по вашим правилам; они не отправляются разработчику. Это дополнительная функция, не средство помощи людям с инвалидностью. Доступ можно отключить в настройках Android. Разрешить эту обработку и открыть настройки?")
+            .setPositiveButton("Согласен") { _, _ ->
+                domainStorage.setEnabled(true)
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
-            .setNegativeButton("Later", null)
+            .setNegativeButton("Отмена", null)
             .show()
     }
 }

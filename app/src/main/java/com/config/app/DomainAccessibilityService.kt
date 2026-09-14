@@ -92,9 +92,6 @@ class DomainAccessibilityService : AccessibilityService() {
         serviceInfo = info
 
         showToast("Domain VPN: сервис запущен")
-        android.util.Log.d(TAG, "=== Service connected ===")
-        android.util.Log.d(TAG, "Domains: ${domainStorage?.getDomains()}")
-        android.util.Log.d(TAG, "Enabled: ${domainStorage?.isEnabled()}")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -108,15 +105,11 @@ class DomainAccessibilityService : AccessibilityService() {
         val eventType = event.eventType
         val eventName = eventTypeToName(eventType)
 
-        android.util.Log.v(TAG, "[$eventName] pkg=$pkg")
-
         // === СТРАТЕГИЯ 1: Браузер — ищем URL по ID адресной строки ===
         val browserConfig = findBrowserConfig(pkg)
         if (browserConfig != null) {
-            android.util.Log.d(TAG, "Browser detected: $pkg, looking for URL bar: ${browserConfig.addressBarId}")
             val url = captureBrowserUrl(browserConfig)
             if (url != null) {
-                android.util.Log.d(TAG, "Browser URL captured: $url")
                 processUrl(url, domains, "browser.id")
                 return
             }
@@ -124,17 +117,14 @@ class DomainAccessibilityService : AccessibilityService() {
 
         // === СТРАТЕГИЯ 2: Telegram — ищем URL в окне ===
         if (isTelegramPackage(pkg)) {
-            android.util.Log.d(TAG, "Telegram event: $eventName pkg=$pkg")
 
             // Пробуем получить URL из window.title
             val windows = windows
             for (window in windows) {
                 val title = window.title?.toString() ?: ""
                 if (title.isNotEmpty() && !title.contains("Telegram") && !title.contains("Chat") && !title.contains("Channel")) {
-                    android.util.Log.d(TAG, "Window title: $title")
                     val url = extractUrl(title)
                     if (url.isNotEmpty()) {
-                        android.util.Log.d(TAG, "URL from window title: $url")
                         processUrl(url, domains, "telegram.title")
                         return
                     }
@@ -144,10 +134,8 @@ class DomainAccessibilityService : AccessibilityService() {
             // Пробуем извлечь из event.text
             val eventText = event.text?.joinToString(" ") ?: ""
             if (eventText.isNotEmpty()) {
-                android.util.Log.d(TAG, "Telegram event.text: $eventText")
                 val url = extractUrl(eventText)
                 if (url.isNotEmpty()) {
-                    android.util.Log.d(TAG, "URL from telegram event.text: $url")
                     processUrl(url, domains, "telegram.text")
                     return
                 }
@@ -158,7 +146,6 @@ class DomainAccessibilityService : AccessibilityService() {
             if (contentDesc.isNotEmpty()) {
                 val url = extractUrl(contentDesc)
                 if (url.isNotEmpty()) {
-                    android.util.Log.d(TAG, "URL from telegram contentDesc: $url")
                     processUrl(url, domains, "telegram.desc")
                     return
                 }
@@ -170,7 +157,6 @@ class DomainAccessibilityService : AccessibilityService() {
                 val url = extractUrlFromNode(source)
                 source.recycle()
                 if (url.isNotEmpty()) {
-                    android.util.Log.d(TAG, "URL from telegram source: $url")
                     processUrl(url, domains, "telegram.source")
                     return
                 }
@@ -182,7 +168,6 @@ class DomainAccessibilityService : AccessibilityService() {
                 val url = findUrlDeep(root)
                 root.recycle()
                 if (url.isNotEmpty()) {
-                    android.util.Log.d(TAG, "URL from telegram deep scan: $url")
                     processUrl(url, domains, "telegram.deep")
                     return
                 }
@@ -195,7 +180,6 @@ class DomainAccessibilityService : AccessibilityService() {
             pkg.contains(base, ignoreCase = true)
         }
         if (matchedByPkg != null) {
-            android.util.Log.d(TAG, "MATCH by package: $matchedByPkg")
             showToast("VPN: $matchedByPkg")
             triggerVpnConnect(matchedByPkg)
         }
@@ -215,7 +199,6 @@ class DomainAccessibilityService : AccessibilityService() {
         root.recycle()
 
         if (nodes.isNullOrEmpty()) {
-            android.util.Log.d(TAG, "No nodes found for id: ${config.addressBarId}")
             return null
         }
 
@@ -281,7 +264,6 @@ class DomainAccessibilityService : AccessibilityService() {
                 if (src.isNotEmpty() && src.length > 4) {
                     val extracted = extractUrl(src)
                     if (extracted.isNotEmpty()) {
-                        android.util.Log.d(TAG, "Deep scan found URL at depth=$depth: $extracted")
                         return extracted
                     }
                 }
@@ -292,7 +274,6 @@ class DomainAccessibilityService : AccessibilityService() {
                 if (child != null) queue.add(Pair(child, depth + 1))
             }
         }
-        android.util.Log.d(TAG, "Deep scan checked $count nodes, no URL")
         return ""
     }
 
@@ -305,14 +286,12 @@ class DomainAccessibilityService : AccessibilityService() {
 
     private fun processUrl(url: String, domains: Set<String>, source: String) {
         val host = extractHost(url)
-        android.util.Log.d(TAG, "Processing URL [$source]: $url (host=$host)")
 
         // Дедупликация: один и тот же URL не обрабатываем чаще 2 сек
         val detectionId = "$source:$url"
         val now = System.currentTimeMillis()
         val lastTime = previousUrlDetections[detectionId] ?: 0L
         if (now - lastTime < COOLDOWN_MS) {
-            android.util.Log.d(TAG, "Cooldown for: $detectionId")
             return
         }
         previousUrlDetections[detectionId] = now
@@ -324,11 +303,9 @@ class DomainAccessibilityService : AccessibilityService() {
         }
 
         if (matched != null) {
-            android.util.Log.d(TAG, "=== MATCHED: $matched ===")
             showToast("VPN: $matched")
             triggerVpnConnect(matched)
         } else {
-            android.util.Log.d(TAG, "No match for host: $host")
         }
     }
 
@@ -344,7 +321,6 @@ class DomainAccessibilityService : AccessibilityService() {
         if (status == VpnStatus.DISCONNECTED || status == VpnStatus.ERROR) {
             autoConnectVpn(domain)
         } else {
-            android.util.Log.d(TAG, "VPN already active")
         }
     }
 
@@ -358,7 +334,6 @@ class DomainAccessibilityService : AccessibilityService() {
                     it.peerEndpoint.isNotEmpty()
                 }
                 if (valid != null) {
-                    android.util.Log.d(TAG, "Connecting to ${valid.name}")
                     vpnManager?.connect(valid)
                     showConnectedNotification(domain)
                 } else {
