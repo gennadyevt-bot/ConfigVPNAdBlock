@@ -43,7 +43,7 @@ object WgConfigParser {
                     val (key, value) = parseKeyValue(line) ?: continue
                     when (key.lowercase()) {
                         "address" -> address = value
-                        "dns" -> dns = value
+                        "dns" -> dns = value.substringBefore(",").trim()
                         "privatekey" -> privateKey = value
                         "jc" -> jc = value
                         "jmin" -> jmin = value
