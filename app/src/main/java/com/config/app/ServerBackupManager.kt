@@ -20,7 +20,8 @@ class ServerBackupManager(private val context: Context) {
                 put("country", server.country)
                 put("flagEmoji", server.flagEmoji)
                 put("interfaceAddress", server.interfaceAddress)
-                put("interfaceDns", server.interfaceDns)
+                put("interfaceDns", server.interfaceDns
+        backup.put("interfaceMtu", server.interfaceMtu))
                 put("interfacePrivateKey", server.interfacePrivateKey)
                 put("peerPublicKey", server.peerPublicKey)
                 put("peerPresharedKey", server.peerPresharedKey)
