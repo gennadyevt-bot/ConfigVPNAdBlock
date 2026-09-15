@@ -9,21 +9,22 @@ object WgConfigParser {
         var name = "QR Config"
         var address = ""
         var dns = "1.1.1.1, 8.8.8.8"
+        var mtu = ""
         var privateKey = ""
         var publicKey = ""
         var presharedKey = ""
         var endpoint = ""
         var allowedIPs = "0.0.0.0/0"
         var persistentKeepalive = "25"
-        var jc = "0"
-        var jmin = "0"
-        var jmax = "0"
-        var s1 = "0"
-        var s2 = "0"
-        var h1 = "0"
-        var h2 = "0"
-        var h3 = "0"
-        var h4 = "0"
+        var jc = ""
+        var jmin = ""
+        var jmax = ""
+        var s1 = ""
+        var s2 = ""
+        var h1 = ""
+        var h2 = ""
+        var h3 = ""
+        var h4 = ""
 
         var inInterface = false
         var inPeer = false
@@ -39,12 +40,19 @@ object WgConfigParser {
                     inPeer = true
                 }
                 line.startsWith("#") || line.startsWith(";") -> continue
-                inInterface -> {
+                // AWG-параметры обфускации встречаются в обеих секциях — принимаем из любой
+                inInterface || inPeer -> {
                     val (key, value) = parseKeyValue(line) ?: continue
                     when (key.lowercase()) {
-                        "address" -> address = value
-                        "dns" -> dns = value.substringBefore(",").trim()
-                        "privatekey" -> privateKey = value
+                        "address" -> if (inInterface) address = value
+                        "dns" -> if (inInterface) dns = value.substringBefore(",").trim()
+                        "mtu" -> if (inInterface) mtu = value
+                        "privatekey" -> if (inInterface) privateKey = value
+                        "publickey" -> if (inPeer) publicKey = value
+                        "presharedkey" -> if (inPeer) presharedKey = value
+                        "endpoint" -> if (inPeer) endpoint = value
+                        "allowedips" -> if (inPeer) allowedIPs = value
+                        "persistentkeepalive" -> if (inPeer) persistentKeepalive = value
                         "jc" -> jc = value
                         "jmin" -> jmin = value
                         "jmax" -> jmax = value
@@ -54,16 +62,6 @@ object WgConfigParser {
                         "h2" -> h2 = value
                         "h3" -> h3 = value
                         "h4" -> h4 = value
-                    }
-                }
-                inPeer -> {
-                    val (key, value) = parseKeyValue(line) ?: continue
-                    when (key.lowercase()) {
-                        "publickey" -> publicKey = value
-                        "presharedkey" -> presharedKey = value
-                        "endpoint" -> endpoint = value
-                        "allowedips" -> allowedIPs = value
-                        "persistentkeepalive" -> persistentKeepalive = value
                     }
                 }
             }
@@ -78,6 +76,7 @@ object WgConfigParser {
             name = name,
             interfaceAddress = address,
             interfaceDns = dns,
+            interfaceMtu = mtu,
             interfacePrivateKey = privateKey,
             peerPublicKey = publicKey,
             peerPresharedKey = presharedKey,
