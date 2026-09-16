@@ -48,6 +48,10 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    // Реальная реализация org.json для юнит-тестов: без неё классы берутся
+    // из заглушечного android.jar и бросают "not mocked", из-за чего
+    // jsonToServer молча возвращал null (падал тест D).
+    testImplementation("org.json:json:20240303")
 
     implementation("com.zaneschepke:amneziawg-android:2.3.7")
     implementation("com.wireguard.android:tunnel:1.0.20260102")

@@ -14,31 +14,7 @@ class ServerBackupManager(private val context: Context) {
         val servers = storage.loadServers()
         val jsonArray = JSONArray()
         servers.forEach { server ->
-            val obj = org.json.JSONObject().apply {
-                put("id", server.id)
-                put("name", server.name)
-                put("country", server.country)
-                put("flagEmoji", server.flagEmoji)
-                put("interfaceAddress", server.interfaceAddress)
-                put("interfaceDns", server.interfaceDns)
-                put("interfaceMtu", server.interfaceMtu)
-                put("interfacePrivateKey", server.interfacePrivateKey)
-                put("peerPublicKey", server.peerPublicKey)
-                put("peerPresharedKey", server.peerPresharedKey)
-                put("peerAllowedIPs", server.peerAllowedIPs)
-                put("peerEndpoint", server.peerEndpoint)
-                put("peerPersistentKeepalive", server.peerPersistentKeepalive)
-                put("jc", server.jc)
-                put("jmin", server.jmin)
-                put("jmax", server.jmax)
-                put("s1", server.s1)
-                put("s2", server.s2)
-                put("h1", server.h1)
-                put("h2", server.h2)
-                put("h3", server.h3)
-                put("h4", server.h4)
-            }
-            jsonArray.put(obj)
+            jsonArray.put(ServerStorage.serverToJson(server))
         }
 
         val file = File(context.cacheDir, "config_backup.json")

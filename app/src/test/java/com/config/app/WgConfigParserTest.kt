@@ -56,4 +56,39 @@ class WgConfigParserTest {
         assertNotNull(s)
         assertEquals("", s!!.interfaceMtu)
     }
+
+    @Test
+    fun testD2_oldJsonWithoutNewFieldsLoads() {
+        // запись совсем старой версии: нет MTU, AWG-параметров и списков приложений
+        val json = JSONObject("""{"id":"x2","name":"VeryOld","interfacePrivateKey":"k","peerPublicKey":"p","peerEndpoint":"e:1"}""")
+        val s = ServerStorage.jsonToServer(json)
+        assertNotNull(s)
+        assertEquals("", s!!.interfaceMtu)
+        assertEquals(emptyList<String>(), s.includedApps)
+        assertEquals("0.0.0.0/0", s.peerAllowedIPs)
+    }
+
+    @Test
+    fun testE_fullTunnelCoversIpv6() {
+        val server = ServerInfo(
+            id = "t1", name = "T",
+            interfacePrivateKey = "k", peerPublicKey = "p", peerEndpoint = "e:1",
+            peerAllowedIPs = "0.0.0.0/0"
+        )
+        val allowed = VpnManager.buildAllowedIPs(server)
+        assertTrue("full-tunnel должен включать IPv4", allowed.contains("0.0.0.0/0"))
+        assertTrue("full-tunnel должен включать ::/0, иначе v6 уйдёт мимо VPN", allowed.contains("::/0"))
+    }
+
+    @Test
+    fun testE2_splitTunnelNotChanged() {
+        val server = ServerInfo(
+            id = "t2", name = "T",
+            interfacePrivateKey = "k", peerPublicKey = "p", peerEndpoint = "e:1",
+            peerAllowedIPs = "10.0.0.0/8, 192.168.0.0/16"
+        )
+        val allowed = VpnManager.buildAllowedIPs(server)
+        assertFalse("split-tunnel не должен получать ::/0", allowed.contains("::/0"))
+        assertTrue(allowed.contains("10.0.0.0/8"))
+    }
 }

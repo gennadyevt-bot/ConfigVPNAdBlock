@@ -50,23 +50,6 @@ class VpnManager private constructor(private val context: Context) {
         } catch (_: Exception) {}
     }
 
-    companion object {
-        var globalStatus: VpnStatus = VpnStatus.DISCONNECTED
-
-        @Volatile
-        private var instance: VpnManager? = null
-
-        fun getInstance(context: Context): VpnManager {
-            return instance ?: synchronized(this) {
-                instance ?: VpnManager(context).also { instance = it }
-            }
-        }
-
-        fun destroyInstance() {
-            instance = null
-        }
-    }
-
     fun getPrepareIntent(activity: Activity): android.content.Intent? {
         return VpnService.prepare(activity)
     }
@@ -278,39 +261,39 @@ class VpnManager private constructor(private val context: Context) {
         }
     }
 
-    // IPv6-диапазоны датацентров Telegram. Сценарий «без IPv6-адреса на
-    // интерфейсе»: мы вырезаем все v6-маршруты, Telegram пробует свои v6-адреса
-    // В ОБХОД туннеля и (если бы мы его не перехватили) упирался бы в блок
-    // РНК — приложение висело бы на «Connecting...». Маршрутизируем только эти
-    // префиксы в туннель: v6-пакеты мгновенно умирают (fast-fail), клиент
-    // сразу падает на IPv4 и идёт через VPN.
-    //
-    // Сценарий «IPv6-адрес на интерфейсе есть» (встроенные WARP-конфиги!):
-    // раньше здесь оставался ::/0 — весь v6-трафик шёл в туннель, включая
-    // попытки Telegram достучаться до своих v6-DC. v6-канал WARP до DC
-    // Telegram у многих провайдеров мёртвый/конgested: каждый запуск Telegram
-    // висел до таймаута (~1 минута), потом падал на IPv4. YouTube/браузер при
-    // этом «летали», т.к. ходили по IPv4. Поэтому ::/0 теперь вырезается
-    // всегда (см. buildAllowedIPs). ВАЖНО: сам Telegram в РФ ЗАБЛОКИРОВАН
-    // Итоговый набор маршрутов:
+    // Итоговый набор маршрутов (buildAllowedIPs):
     // 1) IPv4: как в конфиге. Telegram в РФ ЗАБЛОКИРОВАН провайдером — его
     //    трафик обязан идти через туннель, исключать DC нельзя (опыт 5.0.3:
     //    «Telegram полностью отказал» — напрямую он умирает в блоке РНК).
-    // 2) IPv6: ::/0 вырезаем (остальной v6 пусть идёт напрямую), но префиксы
-    //    DC Telegram добавляем ВСЕГДА: иначе клиент пробует v6-DC напрямую,
-    //    провайдер их молча дропает (~1 мин таймаута), и только потом клиент
-    //    падает на IPv4 (который через туннель идёт за 12 мс — замерено).
-    //    Есть v6-адрес на интерфейсе → DC-v6 реально ходит через WARP;
-    //    нет адреса → пакеты умирают мгновенно (fast-fail) и клиент сразу
-    //    идёт по IPv4.
-    private fun buildAllowedIPs(server: ServerInfo): String {
-        val entries = server.peerAllowedIPs.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        val out = entries.toMutableList()
-        // Full-tunnel перехватывает и IPv6: на мобильных сетях иначе v6 уходит мимо VPN
-        val isFullTunnel = entries.any { it == "0.0.0.0/0" }
-        if (isFullTunnel && !out.contains("::/0")) out.add("::/0")
-        if (out.isEmpty()) out.add("0.0.0.0/0")
-        return out.joinToString(", ")
+    // 2) IPv6: для full-tunnel (0.0.0.0/0) добавляем ::/0 — иначе на
+    //    мобильных сетях оператора v6-трафик (YouTube, ChatGPT, браузер)
+    //    уходит напрямую мимо VPN. Split-tunnel конфиги не трогаем.
+
+    companion object {
+        var globalStatus: VpnStatus = VpnStatus.DISCONNECTED
+
+        @Volatile
+        private var instance: VpnManager? = null
+
+        fun getInstance(context: Context): VpnManager {
+            return instance ?: synchronized(this) {
+                instance ?: VpnManager(context).also { instance = it }
+            }
+        }
+
+        fun destroyInstance() {
+            instance = null
+        }
+
+        fun buildAllowedIPs(server: ServerInfo): String {
+            val entries = server.peerAllowedIPs.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            val out = entries.toMutableList()
+            // Full-tunnel перехватывает и IPv6: на мобильных сетях иначе v6 уходит мимо VPN
+            val isFullTunnel = entries.any { it == "0.0.0.0/0" }
+            if (isFullTunnel && !out.contains("::/0")) out.add("::/0")
+            if (out.isEmpty()) out.add("0.0.0.0/0")
+            return out.joinToString(", ")
+        }
     }
 
     private fun buildConfigString(server: ServerInfo, includedApps: List<String> = emptyList(), withAwg: Boolean = false): String {
