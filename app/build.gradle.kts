@@ -10,8 +10,8 @@ android {
         applicationId = "com.config.vpnadblock"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "6.0.0-alpha6"
+        versionCode = 7
+        versionName = "6.0.0-alpha7"
     }
 
     signingConfigs {
@@ -24,6 +24,10 @@ android {
             enableV1Signing = false
             enableV2Signing = true
             enableV3Signing = true
+            // Выравнивание APK Signing Block: без него offset блока может быть
+            // не кратен 4 байтам → некоторые Android-версии отказывают в установке
+            // («пакет недействителен») даже при корректной v2/v3 подписи.
+            enableSigningBlockAlignment = true
             storeFile = file(System.getenv("UPLOAD_KEYSTORE_PATH")
                 ?: (project.findProperty("UPLOAD_KEYSTORE_PATH") as String?)
                 ?: "cvab-upload.jks")
