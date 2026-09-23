@@ -122,6 +122,9 @@ class VpnManager private constructor(private val context: Context) {
         usingAwg = false
 
         val tunnel = WgTunnel.getInstance()
+        // Phase C: единый VPN slot — наш foreground-сервис биндится в GoBackend
+        // до setState, TUN строится через его Builder (single interface).
+        context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
         try {
             val t0 = System.currentTimeMillis()
             wgBackend.setState(tunnel, WgBackendTunnel.State.UP, config)
@@ -199,6 +202,8 @@ class VpnManager private constructor(private val context: Context) {
                 } else {
                     wgBackend.setState(WgTunnel.getInstance(), WgBackendTunnel.State.DOWN, currentWgConfig)
                 }
+                // Phase C: гасим unified-сервис после разрыва туннеля
+                context.startService(Intent(context, UnifiedVpnService::class.java).setAction(UnifiedVpnService.ACTION_STOP))
                 withContext(Dispatchers.Main) {
                     updateStatus(VpnStatus.DISCONNECTED)
                     currentServer = null
