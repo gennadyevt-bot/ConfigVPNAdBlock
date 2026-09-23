@@ -13,6 +13,17 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: gomobile bind (mitm)
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+          cd mitm && go mod tidy && go get golang.org/x/mobile && gomobile bind -target android -androidapi 26 -o mitm.aar .
+          mkdir -p ../app/libs && cp mitm.aar ../app/libs/mitm.aar
       - run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
       - uses: actions/upload-artifact@v4
         with:
