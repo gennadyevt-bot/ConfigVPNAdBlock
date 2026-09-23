@@ -12,6 +12,4 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-
-rootProject.name = "Config"
-include(":app")
+rootProject.name = "ConfigVPNAdBlock"
