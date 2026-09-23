@@ -147,8 +147,12 @@ class UnifiedVpnService : AndroidVpnService() {
             val routes = intent.getStringExtra("routes") ?: "0.0.0.0/0, ::/0"
             val mtu = intent.getStringExtra("mtu")?.toIntOrNull()?.takeIf { it in 576..65535 } ?: 1280
 
-            // socketpair: wg-go получит один конец как «tun», мы держим другой
-            val pair = Os.socketpair(OsConstants.AF_UNIX, OsConstants.SOCK_SEQPACKET, 0)
+            // socketpair: wg-go получит один конец как «tun», мы держим другой.
+            // SDK 36: двухаргументной сигнатуры нет — используем вариант с out-fd.
+            val fdA = java.io.FileDescriptor()
+            val fdB = java.io.FileDescriptor()
+            Os.socketpair(OsConstants.AF_UNIX, OsConstants.SOCK_SEQPACKET, 0, fdA, fdB)
+            val pair = arrayOf(fdA, fdB)
             val wgFdInt = ParcelFileDescriptor.dup(pair[1]).detachFd()
 
             // интерфейс для приложений — единственный видимый Android'ом
