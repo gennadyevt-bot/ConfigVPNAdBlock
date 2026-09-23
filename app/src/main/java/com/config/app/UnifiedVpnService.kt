@@ -130,8 +130,8 @@ class UnifiedVpnService : AndroidVpnService() {
 
     private inner class Datapath {
         var tunPfd: ParcelFileDescriptor? = null
-        var appFd: java.io.FileDescriptor? = null
-        var wgLocal: java.io.FileDescriptor? = null
+        lateinit var appFd: java.io.FileDescriptor
+        lateinit var wgLocal: java.io.FileDescriptor
         var handle: Int = -1
         @Volatile var running = false
         @Volatile var rxBytes = 0L
@@ -156,11 +156,27 @@ class UnifiedVpnService : AndroidVpnService() {
             b.setSession(name)
             b.setMtu(mtu)
             b.setBlocking(true)
-            addresses.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach {
-                b.addAddress(if ("/" in it) it else it + if (":" in it) "/128" else "/32")
+            addresses.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { a ->
+                val ip: String; val pl: Int
+                if ("/" in a) {
+                    ip = a.substringBefore("/").trim()
+                    pl = a.substringAfter("/").trim().toIntOrNull() ?: (if (":" in ip) 128 else 32)
+                } else {
+                    ip = a; pl = if (":" in ip) 128 else 32
+                }
+                b.addAddress(ip, pl)
             }
             dns.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { b.addDnsServer(it) }
-            routes.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { b.addRoute(it) }
+            routes.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { r ->
+                val ip: String; val pl: Int
+                if ("/" in r) {
+                    ip = r.substringBefore("/").trim()
+                    pl = r.substringAfter("/").trim().toIntOrNull() ?: (if (":" in ip) 128 else 32)
+                } else {
+                    ip = r; pl = if (":" in ip) 128 else 32
+                }
+                b.addRoute(ip, pl)
+            }
             val tun = b.establish() ?: return failDp("tun establish failed")
 
             val d = Datapath()
@@ -195,8 +211,10 @@ class UnifiedVpnService : AndroidVpnService() {
         thread(name = "cvab-fwd", isDaemon = true) {
             val buf = ByteArray(65535)
             val pollIn = 1.toShort() // POLLIN
-            val pApp = StructPollfd().apply { fd = d.appFd; events = pollIn }
-            val pWg = StructPollfd().apply { fd = d.wgLocal; events = pollIn }
+            val appFd = d.appFd
+            val wgFd = d.wgLocal
+            val pApp = StructPollfd().apply { fd = appFd; events = pollIn }
+            val pWg = StructPollfd().apply { fd = wgFd; events = pollIn }
             val pfds = arrayOf(pApp, pWg)
             while (d.running) {
                 try {
@@ -236,9 +254,9 @@ class UnifiedVpnService : AndroidVpnService() {
         d.running = false
         runCatching { if (d.handle >= 0) WgGoReflex.turnOff(d.handle) }
         d.handle = -1
-        runCatching { d.wgLocal?.let { Os.close(it) } }
+        runCatching { Os.close(d.wgLocal) }
         runCatching { d.tunPfd?.close() }
-        d.appFd = null; d.wgLocal = null; d.tunPfd = null
+        d.tunPfd = null
     }
 
     fun currentRx(): Long = dp?.rxBytes ?: 0L
