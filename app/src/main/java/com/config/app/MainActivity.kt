@@ -124,7 +124,7 @@ class MainActivity : AppCompatActivity() {
         val swAdBlock = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.swAdBlock)
         val tvAdBlockStatus = findViewById<android.widget.TextView>(R.id.tvAdBlockStatus)
         fun renderAdBlock(on: Boolean) {
-            tvAdBlockStatus.text = if (on) "вкл (экспериментально)" else "выкл"
+            tvAdBlockStatus.text = if (on) "вкл" else "выкл"
             tvAdBlockStatus.setTextColor(if (on) 0xFF8BC34A.toInt() else 0xFF9CCC9C.toInt())
         }
         renderAdBlock(adPrefs.getBoolean("adblock_enabled", false))
@@ -132,7 +132,7 @@ class MainActivity : AppCompatActivity() {
         swAdBlock.setOnCheckedChangeListener { _, on ->
             adPrefs.edit().putBoolean("adblock_enabled", on).apply()
             renderAdBlock(on)
-            Toast.makeText(this, if (on) "AdBlock: включён (движок пока не активен)" else "AdBlock: выключен", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, if (on) "AdBlock: включён" else "AdBlock: выключен", Toast.LENGTH_SHORT).show()
         }
 
         navView.setNavigationItemSelectedListener { menuItem ->

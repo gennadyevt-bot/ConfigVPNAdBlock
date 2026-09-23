@@ -41,7 +41,7 @@ class AdBlockActivity : AppCompatActivity() {
     private fun updateStatus() {
         val on = prefs.getBoolean("adblock_enabled", false)
         tvStatus.text = if (on)
-            "Экспериментально включён — движок пока не подключён (Phase C)"
+            "Работает (DNS/сетевой фильтр)"
         else
             "Отключено"
         tvStatus.setTextColor(if (on) 0xFF8BC34A.toInt() else 0xFFB0BEC5.toInt())

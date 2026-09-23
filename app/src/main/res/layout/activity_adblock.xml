@@ -62,7 +62,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="26dp"
         android:gravity="center"
-        android:text="Phase B: переключатель хранит настройку, движок ещё не активен. VPN работает как раньше."
+        android:text="DNS/сетевой фильтр работает при включённом VPN. HTTPS-фильтрация и журнал появятся в следующих фазах."
         android:textColor="#9CCC9C"
         android:textSize="12sp" />
 </LinearLayout>
