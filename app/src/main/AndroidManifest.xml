@@ -19,6 +19,18 @@
         </intent>
     </queries>
 
+    <queries>
+        <package android:name="com.yandex.browser" />
+        <package android:name="com.yandex.browser.beta" />
+        <package android:name="com.yandex.browser.alpha" />
+        <intent>
+            <action android:name="com.yandex.browser.contentBlocker.ACTION_SETTING" />
+        </intent>
+        <intent>
+            <action android:name="com.samsung.android.sbrowser.contentBlocker.ACTION_SETTING" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -99,6 +111,17 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <provider
+            android:name=".contentblocker.FilterProvider"
+            android:authorities="com.config.vpnadblock.contentBlocker.contentProvider"
+            android:enabled="true"
+            android:exported="true"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="com.samsung.android.sbrowser.contentBlocker.interfaceVersion"
+                android:value="API_1.0" />
+        </provider>
 
         <provider
             android:name="androidx.core.content.FileProvider"

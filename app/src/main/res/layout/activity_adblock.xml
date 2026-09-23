@@ -30,11 +30,40 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp" />
 
+    <TextView
+        android:id="@+id/tvYandexStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Яндекс.Браузер: не найден"
+        android:textSize="14sp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnConnectYandex"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:backgroundTint="#1B7A2B"
+        android:text="ПОДКЛЮЧИТЬ ЯНДЕКС"
+        android:textColor="#FFFFFF"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/tvCbLog"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:background="#083D10"
+        android:padding="10dp"
+        android:textColor="#9CCC9C"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnInstallCert"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="30dp"
+        android:layout_marginTop="24dp"
         android:backgroundTint="#1B7A2B"
         android:text="Установить сертификат"
         android:textColor="#FFFFFF" />
@@ -56,13 +85,4 @@
         android:backgroundTint="#1B7A2B"
         android:text="Журнал AdBlock"
         android:textColor="#FFFFFF" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="26dp"
-        android:gravity="center"
-        android:text="DNS/сетевой фильтр работает при включённом VPN. HTTPS-фильтрация и журнал появятся в следующих фазах."
-        android:textColor="#9CCC9C"
-        android:textSize="12sp" />
 </LinearLayout>
