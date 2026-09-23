@@ -9,7 +9,7 @@
         <item android:id="@+id/navOwnServer" android:icon="@android:drawable/ic_menu_manage" android:title="Свой сервер"/>
         <item android:id="@+id/navCloudUpdate" android:icon="@android:drawable/ic_menu_rotate" android:title="Обновить серверы"/>
         <item android:id="@+id/navDebugLog" android:icon="@android:drawable/ic_menu_view" android:title="Журнал отладки"/>
-        <item     <item android:id="@+id/navAdBlock" android:icon="@drawable/ic_menu_adblock" android:title="Блокировка рекламы"/>
-android:id="@+id/navAbout" android:icon="@android:drawable/ic_menu_info_details" android:title="О приложении"/>
+        <item android:id="@+id/navAdBlock" android:icon="@drawable/ic_menu_adblock" android:title="Блокировка рекламы"/>
+        <item android:id="@+id/navAbout" android:icon="@android:drawable/ic_menu_info_details" android:title="О приложении"/>
     </group>
 </menu>
