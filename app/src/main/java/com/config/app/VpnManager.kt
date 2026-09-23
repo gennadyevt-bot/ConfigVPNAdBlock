@@ -125,6 +125,18 @@ class VpnManager private constructor(private val context: Context) {
         // Phase C: единый VPN slot — наш foreground-сервис биндится в GoBackend
         // до setState, TUN строится через его Builder (single interface).
         context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
+        // Phase D: AdBlock ON → свой datapath (TUN ↔ форвардер+DNS-фильтр ↔ wg-go
+        // через socketpair). Не поднялся — fail-open в обычный WG-путь ниже.
+        if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) {
+            val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server)
+            if (adOk) {
+                dbg("ADBLOCK: ACTIVE")
+                probePaths()
+                return
+            }
+            dbg("ADBLOCK: datapath failed, fail-open to plain WG")
+            AdBlockLog.add("ADBLOCK: ERROR datapath failed, fail-open to plain WG")
+        }
         try {
             val t0 = System.currentTimeMillis()
             wgBackend.setState(tunnel, WgBackendTunnel.State.UP, config)
