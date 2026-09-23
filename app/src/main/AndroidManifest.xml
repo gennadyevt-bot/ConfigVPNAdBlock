@@ -42,6 +42,7 @@
             android:label="App VPN" />
 
         <activity
+        <activity android:name=".AdBlockActivity" android:exported="false" android:label="Блокировка рекламы" />
             android:name=".GuideActivity"
             android:exported="false"
             android:label="📘 Гайд" />

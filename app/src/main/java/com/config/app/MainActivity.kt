@@ -118,10 +118,28 @@ class MainActivity : AppCompatActivity() {
             drawerLayout.openDrawer(GravityCompat.START)
         }
 
+        // Phase B: индикатор/переключатель AdBlock на главном экране.
+        // Хранит настройку adblock_enabled; движок пока не подключён (Phase C+).
+        val adPrefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
+        val swAdBlock = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.swAdBlock)
+        val tvAdBlockStatus = findViewById<android.widget.TextView>(R.id.tvAdBlockStatus)
+        fun renderAdBlock(on: Boolean) {
+            tvAdBlockStatus.text = if (on) "вкл (экспериментально)" else "выкл"
+            tvAdBlockStatus.setTextColor(if (on) 0xFF8BC34A.toInt() else 0xFF9CCC9C.toInt())
+        }
+        renderAdBlock(adPrefs.getBoolean("adblock_enabled", false))
+        swAdBlock.isChecked = adPrefs.getBoolean("adblock_enabled", false)
+        swAdBlock.setOnCheckedChangeListener { _, on ->
+            adPrefs.edit().putBoolean("adblock_enabled", on).apply()
+            renderAdBlock(on)
+            Toast.makeText(this, if (on) "AdBlock: включён (движок пока не активен)" else "AdBlock: выключен", Toast.LENGTH_SHORT).show()
+        }
+
         navView.setNavigationItemSelectedListener { menuItem ->
             when (menuItem.itemId) {
                 R.id.navAppVpn -> startActivity(android.content.Intent(this, AppVpnActivity::class.java))
                 R.id.navDomainVpn -> startActivity(android.content.Intent(this, DomainVpnActivity::class.java))
+                R.id.navAdBlock -> startActivity(android.content.Intent(this, AdBlockActivity::class.java))
                 R.id.navBackup -> showBackupDialog()
                 R.id.navAutoConnect -> showAutoConnectDialog()
                 R.id.navGuide -> startActivity(android.content.Intent(this, com.config.app.GuideActivity::class.java))
