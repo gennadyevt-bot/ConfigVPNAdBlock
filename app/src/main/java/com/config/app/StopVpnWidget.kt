@@ -18,7 +18,7 @@ class StopVpnWidget : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action == "com.config.app.UPDATE_WIDGET") {
+        if (intent.action == "com.config.vpnadblock.UPDATE_WIDGET") {
             val appWidgetManager = AppWidgetManager.getInstance(context)
             val componentName = ComponentName(context, StopVpnWidget::class.java)
             val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)

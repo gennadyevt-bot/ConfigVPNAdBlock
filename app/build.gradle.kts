@@ -7,23 +7,23 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.config.app"
-        minSdk = 24
+        applicationId = "com.config.vpnadblock"
+        minSdk = 26
         targetSdk = 36
-        versionCode = 33
-        versionName = "5.1.3"
+        versionCode = 1
+        versionName = "6.0.0-alpha1"
     }
 
     signingConfigs {
         create("release") {
-            val ksPath = System.getenv("UPLOAD_KEYSTORE_PATH")
+            // Phase A: fresh upload keystore for ConfigVPNAdBlock (свой ключ,
+            // не из ConfigAdBlock). Пароли переопределяются env/project props.
+            storeFile = file(System.getenv("UPLOAD_KEYSTORE_PATH")
                 ?: (project.findProperty("UPLOAD_KEYSTORE_PATH") as String?)
-            if (ksPath != null) {
-                storeFile = file(ksPath)
-                storePassword = System.getenv("UPLOAD_STORE_PASSWORD") ?: ""
-                keyAlias = System.getenv("UPLOAD_KEY_ALIAS") ?: "configvpn-upload"
-                keyPassword = System.getenv("UPLOAD_KEY_PASSWORD") ?: ""
-            }
+                ?: "cvab-upload.jks")
+            storePassword = System.getenv("UPLOAD_STORE_PASSWORD") ?: "cvab-upload-2026"
+            keyAlias = System.getenv("UPLOAD_KEY_ALIAS") ?: "cvab-upload"
+            keyPassword = System.getenv("UPLOAD_KEY_PASSWORD") ?: "cvab-upload-2026"
         }
     }
 

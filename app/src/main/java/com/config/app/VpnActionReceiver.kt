@@ -9,7 +9,7 @@ import kotlinx.coroutines.launch
 
 class VpnActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == "com.config.app.CONNECT_VPN") {
+        if (intent.action == "com.config.vpnadblock.CONNECT_VPN") {
             val domain = intent.getStringExtra("domain") ?: ""
             android.util.Log.d("VpnActionReceiver", "Connect VPN for domain: $domain")
 

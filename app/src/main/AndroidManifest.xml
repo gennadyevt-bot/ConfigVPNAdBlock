@@ -100,8 +100,8 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.config.app.TOGGLE_VPN" />
-                <action android:name="com.config.app.UPDATE_WIDGET" />
+                <action android:name="com.config.vpnadblock.TOGGLE_VPN" />
+                <action android:name="com.config.vpnadblock.UPDATE_WIDGET" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -112,7 +112,7 @@
             android:name=".VpnActionReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.config.app.CONNECT_VPN" />
+                <action android:name="com.config.vpnadblock.CONNECT_VPN" />
             </intent-filter>
         </receiver>
 
