@@ -18,6 +18,12 @@ android {
         create("release") {
             // Phase A: fresh upload keystore for ConfigVPNAdBlock (свой ключ,
             // не из ConfigAdBlock). Пароли переопределяются env/project props.
+            // v1 ОТКЛЮЧЕН: в zip-структуре APK есть файлы с именами, которые
+            // ломают JAR-валидацию v1 → «пакет недействителен» при установке.
+            // v2+v3 достаточно для Android 7.0+ (minSdk 26).
+            enableV1Signing = false
+            enableV2Signing = true
+            enableV3Signing = true
             storeFile = file(System.getenv("UPLOAD_KEYSTORE_PATH")
                 ?: (project.findProperty("UPLOAD_KEYSTORE_PATH") as String?)
                 ?: "cvab-upload.jks")
