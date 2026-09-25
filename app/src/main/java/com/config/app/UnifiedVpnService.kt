@@ -197,6 +197,8 @@ class UnifiedVpnService : AndroidVpnService() {
             runCatching { val s = WgGoReflex.socketV6(handle); if (s >= 0) protect(s) }
             startForwarder(d)
             AdBlockLog.add("ADBLOCK: ACTIVE mtu=$mtu routes=" + routes.take(60))
+            runCatching { UnifiedAdBlock.start(this) }
+                .onFailure { AdBlockLog.add("UNIFIED_ADBLOCK_ERROR " + (it.message ?: it.javaClass.simpleName)) }
             true
         } catch (e: Exception) {
             AdBlockLog.add("ADBLOCK: ERROR " + (e.message ?: e.javaClass.simpleName))
@@ -253,6 +255,7 @@ class UnifiedVpnService : AndroidVpnService() {
     }
 
     private fun stopDatapath() {
+        runCatching { UnifiedAdBlock.stop() }
         val d = dp ?: return
         dp = null
         d.running = false

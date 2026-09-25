@@ -10,8 +10,8 @@ android {
         applicationId = "com.config.vpnadblock"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "6.0.0-alpha6"
+        versionCode = 7
+        versionName = "6.0.0-alpha7"
     }
 
     signingConfigs {
@@ -53,6 +53,9 @@ android {
 }
 
 dependencies {
+    // AdBlock engine (gomobile AAR, собирается CI из mitm/ — beta7 37c49e4c)
+    implementation(files("libs/mitm.aar"))
+
     testImplementation("junit:junit:4.13.2")
     // Реальная реализация org.json для юнит-тестов: без неё классы берутся
     // из заглушечного android.jar и бросают "not mocked", из-за чего

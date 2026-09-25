@@ -13,6 +13,22 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Install NDK
+        run: |
+          echo "y" | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "ndk;26.1.10909125" 2>/dev/null || echo "y" | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
+      - name: Build mitm AAR (gomobile, AdBlock engine beta7)
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+          cd mitm && go mod tidy && go get golang.org/x/mobile && gomobile bind -target android -androidapi 26 -o mitm.aar .
+      - name: Put AAR into app
+        run: |
+          mkdir -p app/libs
+          cp mitm/mitm.aar app/libs/mitm.aar
       - run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
       - uses: actions/upload-artifact@v4
         with:
