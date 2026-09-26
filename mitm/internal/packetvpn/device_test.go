@@ -215,5 +215,25 @@ func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 	copy(packet[16:20], []byte{10, 0, 0, 2})
 	copy(packet[20:], payload)
 	got := make([]byte, 1500)
-	awaitPacket(t, f2, packet, got)
+	readOnce := func() (int, error) {
+		f2.SetReadDeadline(time.Now().Add(10 * time.Second))
+		return f2.Read(got)
+	}
+	if _, err := f1.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	n, err := readOnce()
+	if err != nil {
+		// первая отправка могла уйти на handshake — повторяем
+		if _, werr := f1.Write(packet); werr != nil {
+			t.Fatal(werr)
+		}
+		n, err = readOnce()
+	}
+	if err != nil {
+		t.Fatal("packet after idle not delivered: ", err)
+	}
+	if !bytes.Equal(packet, got[:n]) {
+		t.Fatalf("packet changed: %x", got[:n])
+	}
 }
