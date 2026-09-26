@@ -112,8 +112,8 @@ class UnifiedVpnService : AndroidVpnService() {
             ACTION_CONNECT -> thread(name = "adblock-datapath") {
                 val ok = startDatapath(intent)
                 notifyReady(ok)
-                if (ok) startForegroundWith("VPN активен • AdBlock: DNS-фильтр включён")
-                else startForegroundWith("VPN активен • AdBlock: ошибка фильтра (fail-open)")
+                if (ok) startForegroundWith(if (dp?.inlineEngine == true) "VPN активен • AdBlock работает" else "VPN активен • HTTPS-фильтр недоступен")
+                else startForegroundWith("VPN: ошибка подключения")
             }
             else -> startForegroundWith("VPN активен • AdBlock: не подключён")
         }
@@ -161,6 +161,13 @@ class UnifiedVpnService : AndroidVpnService() {
             b.setSession(name)
             b.setMtu(mtu)
             b.setBlocking(true)
+            val appPrefs = AppVpnStorage(this)
+            if (appPrefs.isEnabled()) {
+                val included = appPrefs.getSelectedPackages()
+                val excluded = appPrefs.getExcludedPackages()
+                if (included.isNotEmpty()) included.forEach { b.addAllowedApplication(it) }
+                else excluded.forEach { b.addDisallowedApplication(it) }
+            }
             addresses.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { a ->
                 val ip: String; val pl: Int
                 if ("/" in a) {
@@ -196,35 +203,31 @@ class UnifiedVpnService : AndroidVpnService() {
             d.running = true
             runCatching { val s = WgGoReflex.socketV4(handle); if (s >= 0) protect(s) }
             runCatching { val s = WgGoReflex.socketV6(handle); if (s >= 0) protect(s) }
-            // AdBlock engine В ТРАКТЕ: TUN -> Go filter/MITM -> WG stack -> WireGuard.
-            // Один TUN, один VpnService. При ошибке — откат на PacketForwarder.
+            // Сначала запускаем proxy/CA/blocklist, затем подключаем стек и TUN.
+            // Иначе первые пакеты проходят через движок без готового фильтра.
+            val adbOn = getSharedPreferences("app_prefs", MODE_PRIVATE).getBoolean("adblock_enabled", false)
+            val engineReady = adbOn && UnifiedAdBlock.start(this)
             val wgAddr = Regex("(?im)^\\s*Address\\s*=\\s*([0-9A-Fa-f.:]+)").find(wgquick)?.groupValues?.get(1) ?: ""
             var inlineOk = false
-            if (wgAddr.isNotEmpty()) {
+            if (engineReady && wgAddr.isNotEmpty()) {
                 val appFdInt = runCatching { ParcelFileDescriptor.dup(d.appFd).detachFd() }.getOrDefault(-1)
                 val wgFdInt2 = runCatching { ParcelFileDescriptor.dup(d.wgLocal).detachFd() }.getOrDefault(-1)
                 inlineOk = appFdInt >= 0 && wgFdInt2 >= 0 && runCatching {
                     mitm.Mitm.setWgUpstream(wgFdInt2.toLong(), mtu.toLong(), wgAddr)
-                    thread(name = "cvab-inline-engine", isDaemon = true) {
-                        runCatching { mitm.Mitm.startTunnel(appFdInt.toLong(), mtu.toLong()) }
-                    }
+                    mitm.Mitm.startTunnel(appFdInt.toLong(), mtu.toLong())
                     true
-                }.getOrDefault(false)
+                }.onFailure { AdBlockLog.add("UNIFIED_ADBLOCK_ERROR tunnel: ${it.message}") }.getOrDefault(false)
             }
             if (inlineOk) {
                 d.inlineEngine = true
                 AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_ON addr=$wgAddr mtu=$mtu")
             } else {
+                if (engineReady) UnifiedAdBlock.stop()
                 runCatching { mitm.Mitm.clearWgUpstream() }
-                AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_FALLBACK packet-forwarder")
+                AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_FALLBACK packet-forwarder (HTTPS filter unavailable)")
                 startForwarder(d)
             }
             AdBlockLog.add("ADBLOCK: ACTIVE mtu=$mtu routes=" + routes.take(60))
-            val adbOn = getSharedPreferences("app_prefs", MODE_PRIVATE).getBoolean("adblock_enabled", true)
-            if (adbOn) {
-                runCatching { UnifiedAdBlock.start(this) }
-                    .onFailure { AdBlockLog.add("UNIFIED_ADBLOCK_ERROR " + (it.message ?: it.javaClass.simpleName)) }
-            }
             true
         } catch (e: Exception) {
             AdBlockLog.add("ADBLOCK: ERROR " + (e.message ?: e.javaClass.simpleName))
@@ -256,7 +259,8 @@ class UnifiedVpnService : AndroidVpnService() {
                         val n = Os.read(d.appFd, buf, 0, buf.size)
                         if (n <= 0) break
                         d.rxBytes += n
-                        val blocked = runCatching { DnsFilter.tryBlock(buf, n) }.getOrNull()
+                        val blocked = if (getSharedPreferences("app_prefs", MODE_PRIVATE).getBoolean("adblock_enabled", false))
+                            runCatching { DnsFilter.tryBlock(buf, n) }.getOrNull() else null
                         if (blocked != null) {
                             Os.write(d.appFd, blocked, 0, blocked.size)
                         } else {

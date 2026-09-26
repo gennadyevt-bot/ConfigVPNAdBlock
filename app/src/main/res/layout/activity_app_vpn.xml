@@ -99,6 +99,15 @@
         android:drawableTint="#32CD32"
         android:drawablePadding="12dp" />
 
+    <Button
+        android:id="@+id/btnAddYandexBrowser"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:text="Добавить Яндекс Браузер"
+        android:textColor="#FFFFFF"
+        android:backgroundTint="#1B7A2B" />
+
     <TextView
         android:id="@+id/tvCounter"
         android:layout_width="wrap_content"

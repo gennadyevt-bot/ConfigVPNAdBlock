@@ -23,16 +23,20 @@ class AdBlockActivity : AppCompatActivity() {
         prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
         sw = findViewById(R.id.swAdBlockMain)
         tvStatus = findViewById(R.id.tvAdBlockStatusMain)
-        sw.isChecked = prefs.getBoolean("adblock_enabled", true)
+        sw.isChecked = prefs.getBoolean("adblock_enabled", false)
         updateStatus()
         sw.setOnCheckedChangeListener { _, on ->
             prefs.edit().putBoolean("adblock_enabled", on).apply()
-            if (on) thread { runCatching { UnifiedAdBlock.startFromUi(this@AdBlockActivity) } }
+            Toast.makeText(this, "Переподключите VPN для применения", Toast.LENGTH_LONG).show()
             updateStatus()
         }
         findViewById<android.view.View>(R.id.btnInstallCert).setOnClickListener { installCert() }
         findViewById<android.view.View>(R.id.btnResetCert).setOnClickListener { resetCert() }
         findViewById<android.view.View>(R.id.btnAdBlockLog).setOnClickListener { showLog() }
+        findViewById<android.view.View>(R.id.btnAddYandex).setOnClickListener {
+            startActivity(android.content.Intent(this, AppVpnActivity::class.java).putExtra("add_yandex", true))
+        }
+        if (intent.getBooleanExtra("show_log", false)) showLog()
     }
 
     private fun installCert() {
@@ -85,7 +89,10 @@ class AdBlockActivity : AppCompatActivity() {
 
     private fun showLog() {
         val lines = AdBlockLog.snapshot()
-        val text = if (lines.isEmpty()) "Журнал пуст. Включите VPN и подождите несколько секунд." else lines.joinToString("\n")
+        val native = if (UnifiedAdBlock.ready) runCatching {
+            "Стек: ${mitm.Mitm.stackStats()}\nФильтр: ${mitm.Mitm.mitmStats()}\nПотоки: ${mitm.Mitm.flowLog()}"
+        }.getOrElse { "Ошибка чтения движка: ${it.message}" } else "HTTPS-фильтр не запущен"
+        val text = native + "\n\n" + if (lines.isEmpty()) "Журнал пуст. Подключите VPN." else lines.joinToString("\n")
         AlertDialog.Builder(this)
             .setTitle("Журнал AdBlock")
             .setMessage(text)
@@ -94,8 +101,12 @@ class AdBlockActivity : AppCompatActivity() {
     }
 
     private fun updateStatus() {
-        val on = prefs.getBoolean("adblock_enabled", true)
-        tvStatus.text = if (on) "Включено (DNS/SNI/HTTPS фильтр)" else "Отключено"
-        tvStatus.setTextColor(if (on) 0xFF8BC34A.toInt() else 0xFFB0BEC5.toInt())
+        val on = prefs.getBoolean("adblock_enabled", false)
+        tvStatus.text = when {
+            !on -> "Отключено"
+            UnifiedAdBlock.ready -> "HTTPS-фильтр работает"
+            else -> "Выбрано: включить. Переподключите VPN и проверьте журнал"
+        }
+        tvStatus.setTextColor(if (UnifiedAdBlock.ready) 0xFF8BC34A.toInt() else 0xFFB0BEC5.toInt())
     }
 }

@@ -31,6 +31,15 @@
         android:layout_marginTop="8dp" />
 
     <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnAddYandex"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:backgroundTint="#1B7A2B"
+        android:text="Добавить Яндекс Браузер в App VPN"
+        android:textColor="#FFFFFF" />
+
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/btnInstallCert"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

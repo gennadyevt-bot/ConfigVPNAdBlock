@@ -155,12 +155,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.navOwnServer -> com.config.app.OwnServerSetup.show(this, serverStorage) { loadServers() }
                 R.id.navCloudUpdate -> com.config.app.CloudServers.update(this, serverStorage) { loadServers() }
                 R.id.navDebugLog -> {
-                    val lf = java.io.File(filesDir, "debug.log")
-                    val txt = if (lf.exists()) lf.readText().lines().takeLast(90).joinToString("\n") else "Лог пуст. Подключитесь к серверу."
-                    val tv = android.widget.TextView(this)
-                    tv.text = txt; tv.setTextIsSelectable(true); tv.setPadding(50, 40, 50, 40); tv.textSize = 11f
-                    tv.movementMethod = android.text.method.ScrollingMovementMethod.getInstance()
-                    androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Журнал отладки").setView(tv).setPositiveButton("ОК", null).show()
+                    startActivity(android.content.Intent(this, AdBlockActivity::class.java).putExtra("show_log", true))
                 }
                 R.id.navAbout -> {
                     val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }

@@ -124,6 +124,35 @@ class AppVpnActivity : AppCompatActivity() {
             override fun afterTextChanged(s: Editable?) {}
         })
 
+        findViewById<View>(R.id.btnAddYandexBrowser).setOnClickListener {
+            val pkg = "com.yandex.browser"
+            val installed = runCatching { packageManager.getApplicationInfo(pkg, 0) }.isSuccess
+            if (!installed) {
+                Toast.makeText(this, "Яндекс Браузер не найден на устройстве", Toast.LENGTH_LONG).show()
+            } else if (!isIncludeMode) {
+                AlertDialog.Builder(this).setMessage("Переключить App VPN в режим «Через VPN»? Текущий список обхода будет очищен.")
+                    .setPositiveButton("Переключить") { _, _ ->
+                        toggleMode.check(R.id.btnModeInclude)
+                        selectedPackages.add(pkg)
+                        etSearch.setText("Яндекс")
+                        updateCounter()
+                        rvApps.adapter?.notifyDataSetChanged()
+                        Toast.makeText(this, "Нажмите СОХРАНИТЬ и переподключите VPN", Toast.LENGTH_LONG).show()
+                    }.setNegativeButton("Отмена", null).show()
+            } else {
+                selectedPackages.add(pkg)
+                etSearch.setText("Яндекс")
+                updateCounter()
+                rvApps.adapter?.notifyDataSetChanged()
+                Toast.makeText(this, "Нажмите СОХРАНИТЬ и переподключите VPN", Toast.LENGTH_LONG).show()
+            }
+        }
+        if (intent.getBooleanExtra("add_yandex", false)) {
+            findViewById<View>(R.id.btnAddYandexBrowser).post {
+                findViewById<View>(R.id.btnAddYandexBrowser).performClick()
+            }
+        }
+
         btnSave.setOnClickListener {
             if (isIncludeMode) {
                 appVpnStorage.setSelectedPackages(selectedPackages)
@@ -203,6 +232,12 @@ class AppVpnActivity : AppCompatActivity() {
                     if (pkg == packageName || seen.contains(pkg)) continue
                     seen.add(pkg)
                     pkgList.add(pkg to ri.loadLabel(pm).toString())
+                }
+                // Android package visibility may omit installed browsers from launcher queries.
+                val yandexPkg = "com.yandex.browser"
+                if (seen.add(yandexPkg)) runCatching {
+                    val info = pm.getApplicationInfo(yandexPkg, 0)
+                    pkgList.add(yandexPkg to pm.getApplicationLabel(info).toString())
                 }
             } catch (e: Exception) {
                 android.util.Log.e("AppVpn", "Load apps failed: ${e.message}", e)
