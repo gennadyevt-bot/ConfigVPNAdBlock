@@ -98,7 +98,11 @@ class AdBlockJournalActivity : AppCompatActivity() {
                 val fp = sha256Hex(c.encoded)
                 c.subjectX500Principal.name + " fp=" + fp.take(16) + if (fp == ours) " <==OUR-TRUSTED" else " (NOT-OUR)"
             }
-        return if (found.isEmpty()) "(сертификатов Config в системном хранилище НЕТ - не установлен/не включен)"
-        else found.joinToString(" | ")
+        // ВАЖНО: Android намеренно НЕ показывает приложениям пользовательские CA
+        // (targetSdk 24+): этот список - только СИСТЕМНЫЕ сертификаты.
+        // Реальная проверка доверия: в FLOW LOG при серфинге - GENERIC_MITM_OK
+        // (доверяет) против "unknown certificate"/"pinned" (не доверяет).
+        return if (found.isEmpty()) "(системных Config CA нет; пользовательские CA Android скрывает от приложений - смотри GENERIC_MITM_* в FLOW LOG)"
+        else found.joinToString(" | ") + " (только системные; пользовательские CA Android скрывает)"
     }
 }
