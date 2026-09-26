@@ -151,14 +151,19 @@ func TestProtectionBeforeUse(t *testing.T) {
 	}
 }
 
-// blockingSocketPair — socketpair БЕЗ SOCK_NONBLOCK (как в production).
-func blockingSocketPair(t *testing.T) (int, *os.File) {
+// engineSideSocketPair: конец под newPacketTun — БЕЗ SOCK_NONBLOCK (как в
+// production, blocking обязателен для wireguard-go), тестовый конец —
+// nonblocking, чтобы работали SetReadDeadline.
+func engineSideSocketPair(t *testing.T) (int, *os.File) {
 	t.Helper()
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := os.NewFile(uintptr(fds[1]), "test-packets-blocking")
+	if err := unix.SetNonblock(fds[1], true); err != nil {
+		t.Fatal(err)
+	}
+	f := os.NewFile(uintptr(fds[1]), "test-packets-nb")
 	t.Cleanup(func() { f.Close() })
 	return fds[0], f
 }
@@ -170,7 +175,7 @@ func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 	k1, _ := ecdh.X25519().GenerateKey(rand.Reader)
 	k2, _ := ecdh.X25519().GenerateKey(rand.Reader)
 	startDev := func(key *ecdh.PrivateKey) (*device.Device, *os.File, int) {
-		fd, f := blockingSocketPair(t)
+		fd, f := engineSideSocketPair(t)
 		tun, err := newPacketTun(fd, 1280)
 		if err != nil {
 			t.Fatal(err)
@@ -211,7 +216,8 @@ func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 	}
 	// 1) IDLE: без пакетов 500 мс устройства НЕ должны самозакрыться (EAGAIN-баг)
 	time.Sleep(500 * time.Millisecond)
-	// 2) пакет после простоя должен пройти end-to-end
+	// 2) пакет после простоя должен пройти end-to-end (первая отправка может
+	// уйти на handshake — дочитываемся со второй, как в roundtrip-тесте)
 	payload := []byte("after-idle-packet")
 	packet := make([]byte, 20+len(payload))
 	packet[0] = 0x45
@@ -221,12 +227,21 @@ func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 	copy(packet[12:16], []byte{10, 0, 0, 1})
 	copy(packet[16:20], []byte{10, 0, 0, 2})
 	copy(packet[20:], payload)
-	f2.SetReadDeadline(time.Now().Add(10 * time.Second))
+	got := make([]byte, 1500)
+	readOnce := func() (int, error) {
+		f2.SetReadDeadline(time.Now().Add(10 * time.Second))
+		return f2.Read(got)
+	}
 	if _, err := f1.Write(packet); err != nil {
 		t.Fatal(err)
 	}
-	got := make([]byte, 1500)
-	n, err := f2.Read(got)
+	n, err := readOnce()
+	if err != nil {
+		if _, werr := f1.Write(packet); werr != nil {
+			t.Fatal(werr)
+		}
+		n, err = readOnce()
+	}
 	if err != nil {
 		t.Fatal("device died during idle (EAGAIN fatal read): ", err)
 	}
