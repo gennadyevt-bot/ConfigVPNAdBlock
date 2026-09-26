@@ -155,7 +155,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.navOwnServer -> com.config.app.OwnServerSetup.show(this, serverStorage) { loadServers() }
                 R.id.navCloudUpdate -> com.config.app.CloudServers.update(this, serverStorage) { loadServers() }
                 R.id.navDebugLog -> {
-                    startActivity(android.content.Intent(this, AdBlockActivity::class.java).putExtra("show_log", true))
+                    startActivity(android.content.Intent(this, AdBlockJournalActivity::class.java))
                 }
                 R.id.navAbout -> {
                     val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }

@@ -41,7 +41,7 @@ class AdBlockJournalActivity : AppCompatActivity() {
             val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
             val sb = StringBuilder()
             sb.append("=== STATUS ===\n")
-            sb.append("version=").append(timed { packageManager.getPackageInfo(packageName, 0).versionName }).append("\n")
+            sb.append("version=").append(timed { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" }).append("\n")
             sb.append("adblock_enabled=").append(prefs.getBoolean("adblock_enabled", false)).append("\n")
             sb.append("UnifiedAdBlock.running=").append(UnifiedAdBlock.running).append("\n")
             sb.append("UnifiedAdBlock.ready=").append(UnifiedAdBlock.ready).append("\n")
