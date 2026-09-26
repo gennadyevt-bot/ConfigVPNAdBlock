@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sys/unix"
 
 	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
 	"gvisor.dev/gvisor/pkg/tcpip"
