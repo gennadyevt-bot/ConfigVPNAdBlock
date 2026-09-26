@@ -69,10 +69,20 @@ class AdBlockActivity : AppCompatActivity() {
             // Ведём пользователя на экран сертификатов — там один тап.
             Toast.makeText(
                 this,
-                "Сертификат установлен. Теперь ВКЛЮЧИТЕ его: вкладка «Пользовательские» → Config VPN AdBlock CA.",
+                "Сертификат установлен. ВКЛЮЧИТЕ его: вкладка «Пользовательские» → Config VPN AdBlock CA → переключатель.",
                 Toast.LENGTH_LONG
             ).show()
-            runCatching { startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) }
+            // сразу на экран списка сертификатов (там переключатель), запасной — общая Безопасность
+            runCatching {
+                startActivity(android.content.Intent().setComponent(
+                    android.content.ComponentName(
+                        "com.android.settings",
+                        "com.android.settings.Settings\$TrustedCredentialsSettingsActivity"
+                    )
+                ))
+            }.onFailure {
+                runCatching { startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) }
+            }
         }
     }
 
