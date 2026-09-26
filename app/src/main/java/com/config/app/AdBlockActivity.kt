@@ -42,7 +42,7 @@ class AdBlockActivity : AppCompatActivity() {
     private fun installCert() {
         thread {
             try {
-                val dir = cacheDir
+                val dir = filesDir
                 val f = File(dir, "ca.crt")
                 if (!f.exists()) {
                     mitm.Mitm.ensureCA(dir.absolutePath)
@@ -88,7 +88,7 @@ class AdBlockActivity : AppCompatActivity() {
 
     private fun resetCert() {
         thread {
-            val deleted = listOf(File(cacheDir, "ca.crt"), File(cacheDir, "ca.key"))
+            val deleted = listOf(File(filesDir, "ca.crt"), File(filesDir, "ca.key"))
                 .map { it.exists() && it.delete() }
                 .any { it }
             runOnUiThread {

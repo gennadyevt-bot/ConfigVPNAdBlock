@@ -45,7 +45,9 @@ object UnifiedAdBlock {
         engineThread = thread(name = "unified-adblock-engine") {
             try {
                 val filesDir = vpn.filesDir
-                val assetDir = vpn.cacheDir
+                // CA и assetDir в filesDir (как beta7): cacheDir система может стереть,
+                // тогда CA перегенерируется и установленный сертификат перестанет совпадать.
+                val assetDir = vpn.filesDir
 
                 // blocklist из assets -> files (движок читает по пути)
                 val blFile = File(filesDir, "blocklist.txt")
@@ -93,7 +95,7 @@ object UnifiedAdBlock {
         engineThread = thread(name = "unified-adblock-engine") {
             try {
                 val filesDir = ctx.filesDir
-                val assetDir = ctx.cacheDir
+                val assetDir = ctx.filesDir
                 val blFile = java.io.File(filesDir, "blocklist.txt")
                 ctx.assets.open("blocklist.txt").use { input ->
                     blFile.outputStream().use { output -> input.copyTo(output) }
