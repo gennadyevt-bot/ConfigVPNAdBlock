@@ -52,10 +52,14 @@ func loadOrCreateCA(dir string) (tls.Certificate, []byte, error) {
 			if parsed, perr := x509.ParseCertificate(cert.Certificate[0]); perr == nil && parsed.Subject.CommonName == caCommonName {
 				return cert, certPEM, nil
 			}
+			// старое имя -> УДАЛЯЕМ файлы и падаем в генерацию ниже.
+			// Просто "fall through" нельзя: блок "Never silently replace"
+			// вернёт ошибку "cannot load existing CA" и убьёт старт движка.
+			os.Remove(certPath)
+			os.Remove(keyPath)
 		} else {
 			return cert, certPEM, nil
 		}
-		// старое имя -> пропадаем к генерации ниже (файлы перезапишутся)
 	}
 	// Never silently replace a CA already installed by the user.
 	if !os.IsNotExist(certErr) || !os.IsNotExist(keyErr) {
