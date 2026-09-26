@@ -59,6 +59,19 @@ object UnifiedAdBlock {
                     }
                 }
 
+                // ОДИН источник правды для CA = filesDir. В cacheDir может лежать
+                // устаревший CA от старых версий (движок читал его, а кнопка
+                // экспорта/журнал — filesDir) -> рассинхрон "установил сертификат,
+                // а MITM подписывает другим ключом". Перед стартом выравниваем.
+                runCatching {
+                    val caF = java.io.File(filesDir, "ca.crt")
+                    val keyF = java.io.File(filesDir, "ca.key")
+                    if (caF.exists()) {
+                        caF.copyTo(java.io.File(vpn.cacheDir, "ca.crt"), overwrite = true)
+                        if (keyF.exists()) keyF.copyTo(java.io.File(vpn.cacheDir, "ca.key"), overwrite = true)
+                        AdBlockLog.add("UNIFIED_CA_SYNC filesDir->cacheDir fp_ok=" + caF.exists())
+                    }
+                }
                 // CA init + MITM/DNS-SNI engine (создаёт ca.crt/ca.key в assetDir)
                 mitm.Mitm.setAssetDir(assetDir.absolutePath)
                 mitm.Mitm.setProtector(object : mitm.Protector {
