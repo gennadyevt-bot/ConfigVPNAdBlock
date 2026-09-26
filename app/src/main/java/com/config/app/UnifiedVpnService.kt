@@ -67,11 +67,18 @@ class UnifiedVpnService : AndroidVpnService() {
         }
 
         // wg-quick текст для wg-go (зеркалит то, что собирает VpnManager для GoBackend)
-        fun buildWgQuick(s: ServerInfo): String = buildString {
+        fun buildWgQuick(s: ServerInfo, awg: Boolean = false): String = buildString {
             append("[Interface]\nPrivateKey = ").append(s.interfacePrivateKey).append('\n')
             if (s.interfaceAddress.isNotEmpty()) append("Address = ").append(s.interfaceAddress).append('\n')
             if (s.interfaceDns.isNotEmpty()) append("DNS = ").append(s.interfaceDns).append('\n')
             s.interfaceMtu.toIntOrNull()?.let { if (it in 576..65535) append("MTU = ").append(it).append('\n') }
+            if (awg) {
+                listOf("Jc" to s.jc, "Jmin" to s.jmin, "Jmax" to s.jmax,
+                    "S1" to s.s1, "S2" to s.s2, "H1" to s.h1, "H2" to s.h2,
+                    "H3" to s.h3, "H4" to s.h4).forEach { (key, value) ->
+                    if (value.isNotEmpty()) append(key).append(" = ").append(value).append('\n')
+                }
+            }
             append("[Peer]\nPublicKey = ").append(s.peerPublicKey).append('\n')
             if (s.peerPresharedKey.isNotEmpty()) append("PresharedKey = ").append(s.peerPresharedKey).append('\n')
             append("AllowedIPs = ").append(VpnManager.buildAllowedIPs(s)).append('\n')
@@ -80,11 +87,12 @@ class UnifiedVpnService : AndroidVpnService() {
         }
 
         /** Phase D entry: стартует сервис с extras и ждёт результата поднятия datapath. */
-        fun connectAdBlockBlocking(context: Context, server: ServerInfo): Boolean {
+        fun connectAdBlockBlocking(context: Context, server: ServerInfo, awg: Boolean = false): Boolean {
             val f = resetReady()
             val i = Intent(context, UnifiedVpnService::class.java).setAction(ACTION_CONNECT)
                 .putExtra("name", server.name)
-                .putExtra("wgquick", buildWgQuick(server))
+                .putExtra("wgquick", buildWgQuick(server, awg))
+                .putExtra("awg", awg)
                 .putExtra("addresses", server.interfaceAddress)
                 .putExtra("dns", server.interfaceDns)
                 .putExtra("mtu", server.interfaceMtu)
@@ -133,6 +141,7 @@ class UnifiedVpnService : AndroidVpnService() {
         lateinit var appFd: java.io.FileDescriptor
         lateinit var wgLocal: java.io.FileDescriptor
         var handle: Int = -1
+        var awg = false
         @Volatile var running = false
         @Volatile var rxBytes = 0L
         @Volatile var inlineEngine = false
@@ -143,6 +152,7 @@ class UnifiedVpnService : AndroidVpnService() {
             DnsFilter.load(applicationContext)
             val name = (intent.getStringExtra("name") ?: "cvab").take(24)
             val wgquick = intent.getStringExtra("wgquick") ?: return failDp("no wgquick")
+            val awg = intent.getBooleanExtra("awg", false)
             val addresses = intent.getStringExtra("addresses") ?: ""
             val dns = intent.getStringExtra("dns") ?: ""
             val routes = intent.getStringExtra("routes") ?: "0.0.0.0/0, ::/0"
@@ -192,17 +202,28 @@ class UnifiedVpnService : AndroidVpnService() {
             val tun = b.establish() ?: return failDp("tun establish failed")
 
             val d = Datapath()
+            d.awg = awg
             d.tunPfd = tun
             d.appFd = tun.fileDescriptor
             d.wgLocal = pair[0]
             dp = d
 
-            val handle = WgGoReflex.turnOn(name.take(15), wgFdInt, wgquick)
-            if (handle < 0) return failDp("wgTurnOn returned $handle")
+            // The native WG API expects userspace key=value lines; the AWG 2.3.7
+            // backend expects its resolved quick format and a UAPI directory.
+            val handle = if (awg) {
+                val cfg = org.amnezia.awg.config.Config.parse(java.io.ByteArrayInputStream(wgquick.toByteArray()))
+                org.amnezia.awg.GoBackend.awgTurnOn(name.take(15), wgFdInt,
+                    cfg.toAwgQuickStringResolved(false, false, false, this), dataDir.absolutePath)
+            } else {
+                val cfg = com.wireguard.config.Config.parse(java.io.ByteArrayInputStream(wgquick.toByteArray()))
+                WgGoReflex.turnOn(name.take(15), wgFdInt, cfg.toWgUserspaceString())
+            }
+            if (handle < 0) return failDp("native tunnel returned $handle awg=$awg")
             d.handle = handle
             d.running = true
-            runCatching { val s = WgGoReflex.socketV4(handle); if (s >= 0) protect(s) }
-            runCatching { val s = WgGoReflex.socketV6(handle); if (s >= 0) protect(s) }
+            runCatching { val s = if (awg) org.amnezia.awg.GoBackend.awgGetSocketV4(handle) else WgGoReflex.socketV4(handle); if (s >= 0) protect(s) }
+            runCatching { val s = if (awg) org.amnezia.awg.GoBackend.awgGetSocketV6(handle) else WgGoReflex.socketV6(handle); if (s >= 0) protect(s) }
+            AdBlockLog.add("UNIFIED_NATIVE_UP mode=" + if (awg) "AWG" else "WG")
             // Сначала запускаем proxy/CA/blocklist, затем подключаем стек и TUN.
             // Иначе первые пакеты проходят через движок без готового фильтра.
             val adbOn = getSharedPreferences("app_prefs", MODE_PRIVATE).getBoolean("adblock_enabled", false)
@@ -229,7 +250,7 @@ class UnifiedVpnService : AndroidVpnService() {
             }
             AdBlockLog.add("ADBLOCK: ACTIVE mtu=$mtu routes=" + routes.take(60))
             true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             AdBlockLog.add("ADBLOCK: ERROR " + (e.message ?: e.javaClass.simpleName))
             stopDatapath()
             false
@@ -293,7 +314,12 @@ class UnifiedVpnService : AndroidVpnService() {
         }
         dp = null
         d.running = false
-        runCatching { if (d.handle >= 0) WgGoReflex.turnOff(d.handle) }
+        runCatching {
+            if (d.handle >= 0) {
+                if (d.awg) org.amnezia.awg.GoBackend.awgTurnOff(d.handle)
+                else WgGoReflex.turnOff(d.handle)
+            }
+        }
         d.handle = -1
         runCatching { Os.close(d.wgLocal) }
         runCatching { d.tunPfd?.close() }

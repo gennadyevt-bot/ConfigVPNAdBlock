@@ -169,6 +169,16 @@ class VpnManager private constructor(private val context: Context) {
             currentAwgConfig = config
             usingAwg = true
 
+            if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) {
+                context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
+                val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server, awg = true)
+                if (adOk) {
+                    dbg("ADBLOCK: AWG datapath active")
+                    return
+                }
+                AdBlockLog.add("ADBLOCK: ERROR AWG datapath unavailable; using plain AWG")
+            }
+
             val t0 = System.currentTimeMillis()
             awgBackend.setState(AwgTunnel.getInstance(), AwgBackendTunnel.State.UP, config)
             android.util.Log.d("ConfigVPN", "AWG handshake: ${System.currentTimeMillis() - t0} ms")
