@@ -273,7 +273,7 @@ class VpnManager private constructor(private val context: Context) {
                 }
                 val line = if (ms < 0) "$name: нет ответа" else "$name: $ms мс"
                 android.util.Log.d("ConfigVPN", "probe: $line")
-                withContext(Dispatchers.Main) { showToast(line) }
+                // тосты со временем скрыты по запросу (мешают на главном экране)
             }
         }
     }
