@@ -31,12 +31,12 @@
         android:layout_marginTop="8dp" />
 
     <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnAddYandex"
+        android:id="@+id/btnYandexBlocker"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
         android:backgroundTint="#1B7A2B"
-        android:text="Добавить Яндекс Браузер в App VPN"
+        android:text="Добавить AdBlock в Яндекс"
         android:textColor="#FFFFFF" />
 
     <com.google.android.material.button.MaterialButton
@@ -66,12 +66,4 @@
         android:text="Журнал AdBlock"
         android:textColor="#FFFFFF" />
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="26dp"
-        android:gravity="center"
-        android:text="Фильтр DNS/SNI/HTTPS работает при включённом VPN. Для HTTPS-фильтрации один раз установите сертификат."
-        android:textColor="#9CCC9C"
-        android:textSize="12sp" />
 </LinearLayout>

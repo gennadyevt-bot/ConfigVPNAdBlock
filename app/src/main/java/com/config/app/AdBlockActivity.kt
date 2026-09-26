@@ -33,10 +33,28 @@ class AdBlockActivity : AppCompatActivity() {
         findViewById<android.view.View>(R.id.btnInstallCert).setOnClickListener { installCert() }
         findViewById<android.view.View>(R.id.btnResetCert).setOnClickListener { resetCert() }
         findViewById<android.view.View>(R.id.btnAdBlockLog).setOnClickListener { showLog() }
-        findViewById<android.view.View>(R.id.btnAddYandex).setOnClickListener {
-            startActivity(android.content.Intent(this, AppVpnActivity::class.java).putExtra("add_yandex", true))
-        }
+        findViewById<android.view.View>(R.id.btnYandexBlocker).setOnClickListener { openYandexBlocker() }
         if (intent.getBooleanExtra("show_log", false)) showLog()
+    }
+
+    private fun openYandexBlocker() {
+        val actions = listOf(
+            "com.yandex.browser.contentBlocker.ACTION_SETTING",
+            "com.samsung.android.sbrowser.contentBlocker.ACTION_SETTING"
+        )
+        val packages = listOf("com.yandex.browser", "com.yandex.browser.beta", "com.yandex.browser.alpha")
+        for (pkg in packages) {
+            for (action in actions) {
+                try {
+                    startActivity(android.content.Intent(action).setPackage(pkg))
+                    AdBlockLog.add("YANDEX_CB_OPEN_SETTINGS $pkg")
+                    return
+                } catch (_: android.content.ActivityNotFoundException) { }
+            }
+        }
+        AdBlockLog.add("YANDEX_CB_OPEN_SETTINGS unavailable")
+        Toast.makeText(this, "В Яндексе откройте Настройки → Блокировка содержимого → Расширения для блокировки и выберите Config VPN + AdBlock", Toast.LENGTH_LONG).show()
+        packageManager.getLaunchIntentForPackage("com.yandex.browser")?.let { startActivity(it) }
     }
 
     private fun installCert() {
