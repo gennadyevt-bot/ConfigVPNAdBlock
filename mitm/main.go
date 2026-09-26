@@ -329,9 +329,3 @@ func SetWgUpstream(fd int64, mtu int64, localIP string) error { return startWgUp
 // ClearWgUpstream останавливает WG-upstream стек.
 func ClearWgUpstream() { stopWgUpstream() }
 
-// CaCertPem возвращает PEM пользовательского CA (создаёт при необходимости).
-// Схема установки — как в ConfigAdBlock beta7 (Downloads + настройки).
-func CaCertPem(filesDir string) ([]byte, error) {
-	_, certPEM, err := loadOrCreateCA(filesDir)
-	return certPEM, err
-}
