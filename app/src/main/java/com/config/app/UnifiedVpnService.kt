@@ -26,16 +26,12 @@ class UnifiedVpnService : AndroidVpnService() {
         private const val CHANNEL_ID = "unified_vpn"
         private const val NOTIF_ID = 1001
 
-        @Volatile
-        private var readyFuture: CompletableFuture<Boolean>? = null
+        // Результат старта привязан к request_id (ConcurrentHashMap<rid, future>).
+        // Старый общий перезаписываемый readyFuture давал гонку: повторный
+        // connect() заменял future, первый caller получал timeout через 30с,
+        // хотя datapath реально поднялся (INLINE_ON/ACTIVE в журнале).
+        private val readyFutures = java.util.concurrent.ConcurrentHashMap<Long, CompletableFuture<Boolean>>()
         private val requestIds = java.util.concurrent.atomic.AtomicLong()
-
-        @Synchronized
-        private fun resetReady(): CompletableFuture<Boolean> {
-            val f = CompletableFuture<Boolean>()
-            readyFuture = f
-            return f
-        }
 
         // Phase C bind: GoBackend.vpnService.complete(service).
         // false = future уже занят вложенным сервисом библиотеки.
@@ -73,8 +69,10 @@ class UnifiedVpnService : AndroidVpnService() {
 
         /** Phase D entry: стартует сервис с extras и ждёт результата поднятия datapath. */
         fun connectAdBlockBlocking(context: Context, server: ServerInfo, awg: Boolean = false): Boolean {
-            val f = resetReady()
             val requestId = requestIds.incrementAndGet()
+            val f = CompletableFuture<Boolean>()
+            readyFutures[requestId] = f
+            AdBlockLog.add("ADBLOCK: CONNECT_START rid=" + requestId)
             val i = Intent(context, UnifiedVpnService::class.java).setAction(ACTION_CONNECT)
                 .putExtra("request_id", requestId)
                 .putExtra("name", server.name)
@@ -86,8 +84,9 @@ class UnifiedVpnService : AndroidVpnService() {
                 .putExtra("routes", VpnManager.buildAllowedIPs(server))
             context.startService(i)
             return try { f.get(30, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {
+                readyFutures.remove(requestId, f)
                 f.complete(false)
-                AdBlockLog.add("ADBLOCK: ERROR datapath start timed out or interrupted")
+                AdBlockLog.add("ADBLOCK: CONNECT_TIMEOUT rid=" + requestId)
                 false
             }
         }
@@ -108,21 +107,32 @@ class UnifiedVpnService : AndroidVpnService() {
         when (intent?.action) {
             ACTION_STOP -> {
                 requestIds.incrementAndGet()
-                readyFuture?.complete(false)
+                // завершить ВСЕ ожидающие future, а не один общий
+                readyFutures.forEach { (_, f) -> f.complete(false) }
+                readyFutures.clear()
                 stopDatapath()
                 stopSelf()
             }
             ACTION_CONNECT -> {
-                val request = readyFuture
                 val requestId = intent.getLongExtra("request_id", -1)
+                val request = readyFutures[requestId]
+                AdBlockLog.add("ADBLOCK: CONNECT_DISPATCH rid=" + requestId)
                 thread(name = "adblock-datapath") {
                     synchronized(this) {
-                        if (request == null || request.isDone || requestId != requestIds.get()) return@synchronized
-                        val ok = startDatapath(intent)
-                        if (requestId != requestIds.get() || !request.complete(ok)) {
-                            stopDatapath()
+                        val existing = dp
+                        if (existing != null && existing.running) {
+                            // datapath уже поднят (INLINE_ON/ACTIVE) — для этого
+                            // запроса честный true, а не timeout чужого future.
+                            readyFutures.remove(requestId, request)
+                            request?.complete(true)
+                            AdBlockLog.add("ADBLOCK: CONNECT_COMPLETE rid=" + requestId + " ok=true cached")
                             return@synchronized
                         }
+                        val ok = startDatapath(intent)
+                        readyFutures.remove(requestId, request)
+                        request?.complete(ok)
+                        AdBlockLog.add("ADBLOCK: CONNECT_COMPLETE rid=" + requestId + " ok=" + ok)
+                        if (!ok) stopDatapath()
                         startForegroundWith(if (ok) "VPN активен • AdBlock работает" else "VPN: ошибка подключения")
                     }
                 }
