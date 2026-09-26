@@ -24,7 +24,7 @@ func TestWgUpstreamDoesNotAffectOriginalFd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := startWgUpstream(int64(dupFd), 1500, "10.99.0.2"); err != nil {
+	if err := startWgUpstream(int64(dupFd), 1500, "10.99.0.2", ""); err != nil {
 		t.Fatal(err)
 	}
 	flagsAfter, err := unix.FcntlInt(uintptr(fds[0]), unix.F_GETFL, 0)

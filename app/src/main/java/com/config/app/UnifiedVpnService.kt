@@ -230,7 +230,8 @@ class UnifiedVpnService : AndroidVpnService() {
             val wgAddr = addresses.split(",").firstOrNull { it.trim().isNotEmpty() }
                 ?.trim()?.substringBefore("/") ?: return failDp("VPN address missing")
             // Pass one owned descriptor at a time; native startup closes it on failure.
-            mitm.Mitm.setWgUpstream(ParcelFileDescriptor.dup(d.wgLocal).detachFd().toLong(), mtu.toLong(), wgAddr)
+            val wgDns = Regex("(?im)^\\s*DNS\\s*=\\s*([0-9A-Fa-f.:]+)").find(wgquick)?.groupValues?.get(1) ?: ""
+            mitm.Mitm.setWgUpstream(ParcelFileDescriptor.dup(d.wgLocal).detachFd().toLong(), mtu.toLong(), wgAddr, wgDns)
             mitm.Mitm.startTunnel(ParcelFileDescriptor.dup(d.appFd).detachFd().toLong(), mtu.toLong())
             d.inlineEngine = true
             AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_ON addr=$wgAddr mtu=$mtu")

@@ -34,10 +34,11 @@ var (
 type wgUpstreamStack struct {
 	st    *stack.Stack
 	local string
+	dns   string
 	f     *os.File
 }
 
-func startWgUpstream(fd int64, mtu int64, localIP string) error {
+func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) error {
 	wgUpstreamMu.Lock()
 	defer wgUpstreamMu.Unlock()
 	stopWgUpstreamLocked()
@@ -100,7 +101,7 @@ func startWgUpstream(fd int64, mtu int64, localIP string) error {
 		{Destination: header.IPv4EmptySubnet, NIC: 1},
 		{Destination: header.IPv6EmptySubnet, NIC: 1},
 	})
-	wgUpstream = &wgUpstreamStack{st: st, local: localIP, f: f}
+	wgUpstream = &wgUpstreamStack{st: st, local: localIP, dns: dnsServer, f: f}
 	flowLog("WG_UPSTREAM_START local=" + localIP)
 	flowLog("UNIFIED_WG_UPSTREAM_READY local=" + localIP)
 	return nil
@@ -194,6 +195,24 @@ func wgDialUDP(addr string) (net.Conn, error) {
 	return gonet.DialUDP(st, nil, &fa, protocol)
 }
 
+// wgDNSServer: DNS из wg-конфига (параметр setWgUpstream), иначе 8.8.8.8.
+// Хардкод 8.8.8.8 ломал MITM: если он недоступен через туннель, каждый
+// апстрим-дайл ждёт таймаут -> "всё тормозит, реклама на месте".
+func wgDNSServer() tcpip.Address {
+	wgUpstreamMu.RLock()
+	defer wgUpstreamMu.RUnlock()
+	if wgUpstream != nil {
+		if ip := net.ParseIP(wgUpstream.dns); ip != nil {
+			if ip4 := ip.To4(); ip4 != nil {
+				var a4 [4]byte
+				copy(a4[:], ip4)
+				return tcpip.AddrFrom4(a4)
+			}
+		}
+	}
+	return tcpip.AddrFrom4([4]byte{8, 8, 8, 8})
+}
+
 func wgResolve(host string) (net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return ip, nil
@@ -202,19 +221,20 @@ func wgResolve(host string) (net.IP, error) {
 	if st == nil {
 		return nil, fmt.Errorf("wg upstream not active")
 	}
-	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte{8, 8, 8, 8}), Port: 53}
+	fa := tcpip.FullAddress{NIC: 1, Addr: wgDNSServer(), Port: 53}
 	c, err := gonet.DialUDP(st, nil, &fa, ipv4.ProtocolNumber)
 	if err != nil {
 		return nil, fmt.Errorf("wg dns dial: %w", err)
 	}
 	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(4 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(2500 * time.Millisecond))
 	if _, err := c.Write(buildDNSQueryA(host)); err != nil {
 		return nil, err
 	}
 	buf := make([]byte, 512)
 	n, err := c.Read(buf)
 	if err != nil {
+		flowLog("WG_UPSTREAM_DNS_ERR host=" + host + " err=" + err.Error())
 		return nil, err
 	}
 	return parseDNSA(buf[:n])
