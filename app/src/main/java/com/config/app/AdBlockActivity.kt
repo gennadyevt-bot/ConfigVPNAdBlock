@@ -13,10 +13,6 @@ import kotlin.concurrent.thread
 // Экран «Блокировка рекламы»: движок beta7 интегрирован (DNS/SNI/HTTPS через VPN-тракт).
 class AdBlockActivity : AppCompatActivity() {
 
-    companion object {
-        private const val REQ_INSTALL_CERT = 42
-    }
-
     private lateinit var prefs: SharedPreferences
     private lateinit var sw: SwitchCompat
     private lateinit var tvStatus: TextView
@@ -40,49 +36,34 @@ class AdBlockActivity : AppCompatActivity() {
     }
 
     private fun installCert() {
-        thread {
-            try {
-                val dir = filesDir
-                val f = File(dir, "ca.crt")
-                if (!f.exists()) {
-                    mitm.Mitm.ensureCA(dir.absolutePath)
+        try {
+            val pem = mitm.Mitm.caCertPem(filesDir.absolutePath)
+            val name = "ConfigVPNAdBlock-CA.crt"
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+                    put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/x-x509-ca-cert")
+                    put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
                 }
-                val bytes = f.readBytes()
-                runOnUiThread {
-                    val i = android.security.KeyChain.createInstallIntent()
-                    i.putExtra(android.security.KeyChain.EXTRA_CERTIFICATE, bytes)
-                    i.putExtra(android.security.KeyChain.EXTRA_NAME, "Config VPN AdBlock CA")
-                    startActivityForResult(i, REQ_INSTALL_CERT)
+                val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri == null) { Toast.makeText(this, "Не удалось сохранить сертификат", Toast.LENGTH_LONG).show(); return }
+                try {
+                    val stream = contentResolver.openOutputStream(uri) ?: error("Не удалось открыть файл сертификата")
+                    stream.use { it.write(pem) }
+                } catch (e: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    throw e
                 }
-            } catch (t: Throwable) {
-                runOnUiThread {
-                    Toast.makeText(this, "Ошибка сертификата: " + (t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
-                }
+            } else {
+                val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                dir.mkdirs()
+                java.io.File(dir, name).writeBytes(pem)
             }
-        }
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_INSTALL_CERT && resultCode == RESULT_OK) {
-            // Android не даёт приложению включить сертификат самому (защита ОС).
-            // Ведём пользователя на экран сертификатов — там один тап.
-            Toast.makeText(
-                this,
-                "Сертификат установлен. ВКЛЮЧИТЕ его: вкладка «Пользовательские» → Config VPN AdBlock CA → переключатель.",
-                Toast.LENGTH_LONG
-            ).show()
-            // сразу на экран списка сертификатов (там переключатель), запасной — общая Безопасность
-            runCatching {
-                startActivity(android.content.Intent().setComponent(
-                    android.content.ComponentName(
-                        "com.android.settings",
-                        "com.android.settings.Settings\$TrustedCredentialsSettingsActivity"
-                    )
-                ))
-            }.onFailure {
-                runCatching { startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) }
-            }
+            prefs.edit().putString("ca_export_name", name).apply()
+            Toast.makeText(this, "Сертификат сохранён в Загрузки. Дальше: Настройки -> Безопасность -> Установить сертификат -> CA-сертификат -> выбрать " + name, Toast.LENGTH_LONG).show()
+            try { startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Toast.makeText(this, "Ошибка: " + (e.message ?: "?"), Toast.LENGTH_LONG).show()
         }
     }
 
