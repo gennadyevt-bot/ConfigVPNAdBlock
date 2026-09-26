@@ -30,6 +30,8 @@ import (
 var caFileMu sync.Mutex
 var caInitMu sync.Mutex
 
+const caCommonName = "Config VPN AdBlock CA"
+
 func loadOrCreateCA(dir string) (tls.Certificate, []byte, error) {
 	caFileMu.Lock()
 	defer caFileMu.Unlock()
@@ -40,7 +42,20 @@ func loadOrCreateCA(dir string) (tls.Certificate, []byte, error) {
 	keyPEM, keyErr := os.ReadFile(keyPath)
 	if certErr == nil && keyErr == nil {
 		cert, err := tls.X509KeyPair(certPEM, keyPEM)
-		return cert, certPEM, err
+		if err != nil {
+			return tls.Certificate{}, nil, err
+		}
+		// Регенерация, если CA старого имени: коллизия с сертификатом
+		// ConfigAdBlock в системном хранилище (одинаковое имя, другой ключ)
+		// даёт "unknown certificate" на каждый MITM.
+		if len(cert.Certificate) > 0 {
+			if parsed, perr := x509.ParseCertificate(cert.Certificate[0]); perr == nil && parsed.Subject.CommonName == caCommonName {
+				return cert, certPEM, nil
+			}
+		} else {
+			return cert, certPEM, nil
+		}
+		// старое имя -> пропадаем к генерации ниже (файлы перезапишутся)
 	}
 	// Never silently replace a CA already installed by the user.
 	if !os.IsNotExist(certErr) || !os.IsNotExist(keyErr) {
@@ -53,7 +68,7 @@ func loadOrCreateCA(dir string) (tls.Certificate, []byte, error) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Config AdBlock CA", Organization: []string{"Config"}},
+		Subject:               pkix.Name{CommonName: caCommonName, Organization: []string{"ConfigVPNAdBlock"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().AddDate(10, 0, 0),
 		IsCA:                  true,

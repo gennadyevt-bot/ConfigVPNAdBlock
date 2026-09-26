@@ -48,6 +48,8 @@ class AdBlockJournalActivity : AppCompatActivity() {
             sb.append("UnifiedAdBlock.SOURCE=").append(UnifiedAdBlock.SOURCE).append("\n")
             sb.append("ca.crt=").append(File(filesDir, "ca.crt").exists()).append("\n")
             sb.append("ca.key=").append(File(filesDir, "ca.key").exists()).append("\n")
+            sb.append("ourCA_fp=").append(timed { sha256Hex(File(filesDir, "ca.crt").readBytes()) }).append("\n")
+            sb.append("caTrustScan=").append(timed { trustScan() }).append("\n")
             sb.append("\n=== NATIVE STATUS ===\n")
             sb.append("stackStats=").append(timed { mitm.Mitm.stackStats() }).append("\n")
             sb.append("tunStats=").append(timed { mitm.Mitm.tunStats() }).append("\n")
@@ -78,5 +80,25 @@ class AdBlockJournalActivity : AppCompatActivity() {
         val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
         cm.setPrimaryClip(android.content.ClipData.newPlainText("adblock-journal", tv.text))
         Toast.makeText(this, "Журнал скопирован", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun sha256Hex(b: ByteArray): String {
+        val d = java.security.MessageDigest.getInstance("SHA-256").digest(b)
+        return d.joinToString("") { "%02X".format(it) }
+    }
+
+    private fun trustScan(): String {
+        val ours = sha256Hex(File(filesDir, "ca.crt").readBytes())
+        val tf = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+        tf.init(null as java.security.KeyStore?)
+        val tm = tf.trustManagers[0] as javax.net.ssl.X509TrustManager
+        val found = tm.acceptedIssuers
+            .filter { it.subjectX500Principal.name.contains("Config", ignoreCase = true) }
+            .map { c ->
+                val fp = sha256Hex(c.encoded)
+                c.subjectX500Principal.name + " fp=" + fp.take(16) + if (fp == ours) " <==OUR-TRUSTED" else " (NOT-OUR)"
+            }
+        return if (found.isEmpty()) "(сертификатов Config в системном хранилище НЕТ - не установлен/не включен)"
+        else found.joinToString(" | ")
     }
 }
