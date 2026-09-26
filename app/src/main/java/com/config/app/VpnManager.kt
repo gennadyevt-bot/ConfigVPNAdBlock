@@ -125,8 +125,8 @@ class VpnManager private constructor(private val context: Context) {
         // Phase C: единый VPN slot — наш foreground-сервис биндится в GoBackend
         // до setState, TUN строится через его Builder (single interface).
         context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
-        // Phase D: AdBlock ON → свой datapath (TUN ↔ форвардер+DNS-фильтр ↔ wg-go
-        // через socketpair). Не поднялся — fail-open в обычный WG-путь ниже.
+        // AdBlock ON: Android TUN → фильтр → WG/AWG packet engine.
+        // При ошибке фильтра подключение завершается с явной ошибкой.
         if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) {
             val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server)
             if (adOk) {
@@ -134,8 +134,7 @@ class VpnManager private constructor(private val context: Context) {
                 probePaths()
                 return
             }
-            dbg("ADBLOCK: datapath failed, fail-open to plain WG")
-            AdBlockLog.add("ADBLOCK: ERROR datapath failed, fail-open to plain WG")
+            throw IllegalStateException("AdBlock не запущен. Откройте журнал AdBlock")
         }
         try {
             val t0 = System.currentTimeMillis()
@@ -176,7 +175,7 @@ class VpnManager private constructor(private val context: Context) {
                     dbg("ADBLOCK: AWG datapath active")
                     return
                 }
-                AdBlockLog.add("ADBLOCK: ERROR AWG datapath unavailable; using plain AWG")
+                throw IllegalStateException("AdBlock не запущен. Откройте журнал AdBlock")
             }
 
             val t0 = System.currentTimeMillis()
@@ -188,6 +187,7 @@ class VpnManager private constructor(private val context: Context) {
             }
             probePaths()
         } catch (e: Exception) {
+            if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) throw e
             // Фолбэк: сервер не принял junk-параметры — пробуем обычный WireGuard
             android.util.Log.w("ConfigVPN", "AWG failed, falling back to plain WireGuard", e)
             dbg("AWG FAILED: " + (e.stackTraceToString() ?: e.toString()).take(1500))

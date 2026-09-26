@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
@@ -39,6 +40,7 @@ var (
 	stackMu   sync.Mutex
 	stackInst *stack.Stack
 	stackDev  stack.LinkEndpoint
+	stackFile *os.File
 
 	direct443 int64
 )
@@ -297,8 +299,14 @@ func TunStats() string {
 
 // StartTunnel поднимает стек на fd (TUN из establish().detachFd()).
 func StartTunnel(fd int64, mtu int64) error {
-	dev, err := iobased.New(&tunCounter{f: os.NewFile(uintptr(fd), "tun")}, uint32(mtu), 0)
+	if err := unix.SetNonblock(int(fd), true); err != nil {
+		unix.Close(int(fd))
+		return err
+	}
+	f := os.NewFile(uintptr(fd), "tun")
+	dev, err := iobased.New(&tunCounter{f: f}, uint32(mtu), 0)
 	if err != nil {
+		f.Close()
 		return err
 	}
 	st, err := core.CreateStack(&core.Config{
@@ -307,11 +315,13 @@ func StartTunnel(fd int64, mtu int64) error {
 	})
 	if err != nil {
 		dev.Close()
+		f.Close()
 		return err
 	}
 	stackMu.Lock()
 	stackInst = st
 	stackDev = dev
+	stackFile = f
 	stackMu.Unlock()
 	return nil
 }
@@ -341,6 +351,11 @@ func StackStats() string {
 func StopTunnel() {
 	stackMu.Lock()
 	defer stackMu.Unlock()
+	// iobased.Endpoint.Close does not close its io.ReadWriter.
+	if stackFile != nil {
+		stackFile.Close()
+		stackFile = nil
+	}
 	ClearBypassCache() // bypass-кэш живёт только одну сессию (GPT)
 	if stackInst != nil {
 		stackInst.Close()

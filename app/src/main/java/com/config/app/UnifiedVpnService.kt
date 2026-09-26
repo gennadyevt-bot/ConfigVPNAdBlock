@@ -11,25 +11,13 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.system.Os
 import android.system.OsConstants
-import android.system.StructPollfd
 import androidx.core.app.NotificationCompat
 import com.wireguard.android.backend.GoBackend
 import java.util.concurrent.CompletableFuture
 import kotlin.concurrent.thread
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 
-// Phase C+D: единый VPN slot для всего приложения.
-//
-// Phase C (AdBlock OFF): рефлексивный bind в GoBackend.vpnService — wg-go строит
-// TUN через наш Builder, всё как раньше.
-//
-// Phase D (AdBlock ON): приложения видят ТОЛЬКО наш интерфейс (Builder +
-// establish в этом сервисе). Между приложениями и wg-go — socketpair
-// (SOCK_SEQPACKET = пакетные границы). Форвардер гоняет пакеты туда-обратно и
-// пропускает DNS-запросы через DnsFilter (NXDOMAIN для рекламных доменов).
-// wg-go получает fd сокетпейра через приватный native wgTurnOn (WgGoReflex).
-// Один VpnService, один интерфейс, одна notification — второго VPN slot нет.
+// Один Android TUN. AdBlock фильтрует пакеты, затем передаёт их WG/AWG
+// через packet socket и специальный tun.Device внутри Go-движка.
 class UnifiedVpnService : AndroidVpnService() {
 
     companion object {
@@ -40,16 +28,13 @@ class UnifiedVpnService : AndroidVpnService() {
 
         @Volatile
         private var readyFuture: CompletableFuture<Boolean>? = null
+        private val requestIds = java.util.concurrent.atomic.AtomicLong()
 
         @Synchronized
         private fun resetReady(): CompletableFuture<Boolean> {
             val f = CompletableFuture<Boolean>()
             readyFuture = f
             return f
-        }
-
-        private fun notifyReady(ok: Boolean) {
-            readyFuture?.complete(ok)
         }
 
         // Phase C bind: GoBackend.vpnService.complete(service).
@@ -89,7 +74,9 @@ class UnifiedVpnService : AndroidVpnService() {
         /** Phase D entry: стартует сервис с extras и ждёт результата поднятия datapath. */
         fun connectAdBlockBlocking(context: Context, server: ServerInfo, awg: Boolean = false): Boolean {
             val f = resetReady()
+            val requestId = requestIds.incrementAndGet()
             val i = Intent(context, UnifiedVpnService::class.java).setAction(ACTION_CONNECT)
+                .putExtra("request_id", requestId)
                 .putExtra("name", server.name)
                 .putExtra("wgquick", buildWgQuick(server, awg))
                 .putExtra("awg", awg)
@@ -98,7 +85,11 @@ class UnifiedVpnService : AndroidVpnService() {
                 .putExtra("mtu", server.interfaceMtu)
                 .putExtra("routes", VpnManager.buildAllowedIPs(server))
             context.startService(i)
-            return runBlocking { withTimeoutOrNull(15000) { f.get() } } == true
+            return try { f.get(30, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {
+                f.complete(false)
+                AdBlockLog.add("ADBLOCK: ERROR datapath start timed out or interrupted")
+                false
+            }
         }
     }
 
@@ -116,14 +107,25 @@ class UnifiedVpnService : AndroidVpnService() {
         bindIntoGoBackend(this)
         when (intent?.action) {
             ACTION_STOP -> {
+                requestIds.incrementAndGet()
+                readyFuture?.complete(false)
                 stopDatapath()
                 stopSelf()
             }
-            ACTION_CONNECT -> thread(name = "adblock-datapath") {
-                val ok = startDatapath(intent)
-                notifyReady(ok)
-                if (ok) startForegroundWith(if (dp?.inlineEngine == true) "VPN активен • AdBlock работает" else "VPN активен • HTTPS-фильтр недоступен")
-                else startForegroundWith("VPN: ошибка подключения")
+            ACTION_CONNECT -> {
+                val request = readyFuture
+                val requestId = intent.getLongExtra("request_id", -1)
+                thread(name = "adblock-datapath") {
+                    synchronized(this) {
+                        if (request == null || request.isDone || requestId != requestIds.get()) return@synchronized
+                        val ok = startDatapath(intent)
+                        if (requestId != requestIds.get() || !request.complete(ok)) {
+                            stopDatapath()
+                            return@synchronized
+                        }
+                        startForegroundWith(if (ok) "VPN активен • AdBlock работает" else "VPN: ошибка подключения")
+                    }
+                }
             }
             else -> startForegroundWith("VPN активен • AdBlock: не подключён")
         }
@@ -142,14 +144,15 @@ class UnifiedVpnService : AndroidVpnService() {
         var tunPfd: ParcelFileDescriptor? = null
         lateinit var appFd: java.io.FileDescriptor
         lateinit var wgLocal: java.io.FileDescriptor
-        var handle: Int = -1
-        var awg = false
+        var packetEngine = false
         @Volatile var running = false
         @Volatile var rxBytes = 0L
         @Volatile var inlineEngine = false
     }
 
+    @Synchronized
     private fun startDatapath(intent: Intent): Boolean {
+        stopDatapath()
         return try {
             DnsFilter.load(applicationContext)
             val name = (intent.getStringExtra("name") ?: "cvab").take(24)
@@ -160,13 +163,14 @@ class UnifiedVpnService : AndroidVpnService() {
             val routes = intent.getStringExtra("routes") ?: "0.0.0.0/0, ::/0"
             val mtu = intent.getStringExtra("mtu")?.toIntOrNull()?.takeIf { it in 576..65535 } ?: 1280
 
-            // socketpair: wg-go получит один конец как «tun», мы держим другой.
-            // SDK 36: двухаргументной сигнатуры нет — используем вариант с out-fd.
-            val fdA = java.io.FileDescriptor()
-            val fdB = java.io.FileDescriptor()
-            Os.socketpair(OsConstants.AF_UNIX, OsConstants.SOCK_SEQPACKET, 0, fdA, fdB)
-            val pair = arrayOf(fdA, fdB)
-            val wgFdInt = ParcelFileDescriptor.dup(pair[1]).detachFd()
+            // Resolve endpoints before establishing the Android VPN interface.
+            val settings = if (awg) {
+                org.amnezia.awg.config.Config.parse(java.io.ByteArrayInputStream(wgquick.toByteArray()))
+                    .toAwgUserspaceString(false, this)
+            } else {
+                com.wireguard.config.Config.parse(java.io.ByteArrayInputStream(wgquick.toByteArray()))
+                    .toWgUserspaceString()
+            }
 
             // интерфейс для приложений — единственный видимый Android'ом
             val b = Builder()
@@ -204,54 +208,32 @@ class UnifiedVpnService : AndroidVpnService() {
             val tun = b.establish() ?: return failDp("tun establish failed")
 
             val d = Datapath()
-            d.awg = awg
             d.tunPfd = tun
             d.appFd = tun.fileDescriptor
-            d.wgLocal = pair[0]
             dp = d
+            val fdA = java.io.FileDescriptor()
+            val fdB = java.io.FileDescriptor()
+            Os.socketpair(OsConstants.AF_UNIX, OsConstants.SOCK_SEQPACKET, 0, fdA, fdB)
+            d.wgLocal = fdA
+            val nativeFd = try { ParcelFileDescriptor.dup(fdB).detachFd() }
+                finally { Os.close(fdB) }
 
-            // The native WG API expects userspace key=value lines; the AWG 2.3.7
-            // backend expects its resolved quick format and a UAPI directory.
-            val handle = if (awg) {
-                val cfg = org.amnezia.awg.config.Config.parse(java.io.ByteArrayInputStream(wgquick.toByteArray()))
-                org.amnezia.awg.GoBackend.awgTurnOn(name.take(15), wgFdInt,
-                    cfg.toAwgQuickStringResolved(false, false, false, this), dataDir.absolutePath)
-            } else {
-                val cfg = com.wireguard.config.Config.parse(java.io.ByteArrayInputStream(wgquick.toByteArray()))
-                WgGoReflex.turnOn(name.take(15), wgFdInt, cfg.toWgUserspaceString())
+            if (!UnifiedAdBlock.start(this)) {
+                ParcelFileDescriptor.adoptFd(nativeFd).close()
+                return failDp("AdBlock engine initialization failed")
             }
-            if (handle < 0) return failDp("native tunnel returned $handle awg=$awg")
-            d.handle = handle
+            // StartPacketVPN takes ownership of nativeFd, even on error.
+            mitm.Mitm.startPacketVPN(nativeFd.toLong(), mtu.toLong(), settings)
+            d.packetEngine = true
             d.running = true
-            runCatching { val s = if (awg) org.amnezia.awg.GoBackend.awgGetSocketV4(handle) else WgGoReflex.socketV4(handle); if (s >= 0) protect(s) }
-            runCatching { val s = if (awg) org.amnezia.awg.GoBackend.awgGetSocketV6(handle) else WgGoReflex.socketV6(handle); if (s >= 0) protect(s) }
             AdBlockLog.add("UNIFIED_NATIVE_UP mode=" + if (awg) "AWG" else "WG")
-            // Сначала запускаем proxy/CA/blocklist, затем подключаем стек и TUN.
-            // Иначе первые пакеты проходят через движок без готового фильтра.
-            val adbOn = getSharedPreferences("app_prefs", MODE_PRIVATE).getBoolean("adblock_enabled", false)
-            AdBlockLog.add("ADBLOCK_PREF enabled=" + adbOn)
-            if (!adbOn) AdBlockLog.add("UNIFIED_ADBLOCK_DISABLED pref=false")
-            val engineReady = adbOn && UnifiedAdBlock.start(this)
-            val wgAddr = Regex("(?im)^\\s*Address\\s*=\\s*([0-9A-Fa-f.:]+)").find(wgquick)?.groupValues?.get(1) ?: ""
-            var inlineOk = false
-            if (engineReady && wgAddr.isNotEmpty()) {
-                val appFdInt = runCatching { ParcelFileDescriptor.dup(d.appFd).detachFd() }.getOrDefault(-1)
-                val wgFdInt2 = runCatching { ParcelFileDescriptor.dup(d.wgLocal).detachFd() }.getOrDefault(-1)
-                inlineOk = appFdInt >= 0 && wgFdInt2 >= 0 && runCatching {
-                    mitm.Mitm.setWgUpstream(wgFdInt2.toLong(), mtu.toLong(), wgAddr)
-                    mitm.Mitm.startTunnel(appFdInt.toLong(), mtu.toLong())
-                    true
-                }.onFailure { AdBlockLog.add("UNIFIED_ADBLOCK_ERROR tunnel: ${it.message}") }.getOrDefault(false)
-            }
-            if (inlineOk) {
-                d.inlineEngine = true
-                AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_ON addr=$wgAddr mtu=$mtu")
-            } else {
-                if (engineReady) UnifiedAdBlock.stop()
-                runCatching { mitm.Mitm.clearWgUpstream() }
-                AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_FALLBACK packet-forwarder (HTTPS filter unavailable)")
-                startForwarder(d)
-            }
+            val wgAddr = addresses.split(",").firstOrNull { it.trim().isNotEmpty() }
+                ?.trim()?.substringBefore("/") ?: return failDp("VPN address missing")
+            // Pass one owned descriptor at a time; native startup closes it on failure.
+            mitm.Mitm.setWgUpstream(ParcelFileDescriptor.dup(d.wgLocal).detachFd().toLong(), mtu.toLong(), wgAddr)
+            mitm.Mitm.startTunnel(ParcelFileDescriptor.dup(d.appFd).detachFd().toLong(), mtu.toLong())
+            d.inlineEngine = true
+            AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_ON addr=$wgAddr mtu=$mtu")
             AdBlockLog.add("ADBLOCK: ACTIVE mtu=$mtu routes=" + routes.take(60))
             true
         } catch (e: Throwable) {
@@ -267,64 +249,18 @@ class UnifiedVpnService : AndroidVpnService() {
         return false
     }
 
-    private fun startForwarder(d: Datapath) {
-        thread(name = "cvab-fwd", isDaemon = true) {
-            val buf = ByteArray(65535)
-            val pollIn = 1.toShort() // POLLIN
-            val appFd = d.appFd
-            val wgFd = d.wgLocal
-            val pApp = StructPollfd().apply { fd = appFd; events = pollIn }
-            val pWg = StructPollfd().apply { fd = wgFd; events = pollIn }
-            val pfds = arrayOf(pApp, pWg)
-            while (d.running) {
-                try {
-                    pApp.revents = 0; pWg.revents = 0
-                    Os.poll(pfds, 1000)
-                    if (pApp.revents.toInt() and 1 != 0) {
-                        val n = Os.read(d.appFd, buf, 0, buf.size)
-                        if (n <= 0) break
-                        d.rxBytes += n
-                        val blocked = if (getSharedPreferences("app_prefs", MODE_PRIVATE).getBoolean("adblock_enabled", false))
-                            runCatching { DnsFilter.tryBlock(buf, n) }.getOrNull() else null
-                        if (blocked != null) {
-                            Os.write(d.appFd, blocked, 0, blocked.size)
-                        } else {
-                            Os.write(d.wgLocal, buf, 0, n)
-                        }
-                    }
-                    if (pWg.revents.toInt() and 1 != 0) {
-                        val n = Os.read(d.wgLocal, buf, 0, buf.size)
-                        if (n <= 0) break
-                        Os.write(d.appFd, buf, 0, n)
-                    }
-                } catch (e: Exception) {
-                    if (d.running) {
-                        AdBlockLog.add("ADBLOCK: ERROR fwd " + (e.message ?: e.javaClass.simpleName))
-                    }
-                    break
-                }
-            }
-            d.running = false
-            AdBlockLog.add("ADBLOCK: forwarder exit")
-        }
-    }
-
+    @Synchronized
     private fun stopDatapath() {
         runCatching { UnifiedAdBlock.stop() }
         val d = dp ?: return
-        if (d.inlineEngine) {
+        if (d.packetEngine) {
             runCatching { mitm.Mitm.stopTunnel() }
             runCatching { mitm.Mitm.clearWgUpstream() }
         }
         dp = null
         d.running = false
-        runCatching {
-            if (d.handle >= 0) {
-                if (d.awg) org.amnezia.awg.GoBackend.awgTurnOff(d.handle)
-                else WgGoReflex.turnOff(d.handle)
-            }
-        }
-        d.handle = -1
+        if (d.packetEngine) runCatching { mitm.Mitm.stopPacketVPN() }
+        d.packetEngine = false
         runCatching { Os.close(d.wgLocal) }
         runCatching { d.tunPfd?.close() }
         d.tunPfd = null

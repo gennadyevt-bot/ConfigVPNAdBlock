@@ -24,7 +24,7 @@ jobs:
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
-          cd mitm && go mod tidy && go get golang.org/x/mobile && gomobile bind -target android -androidapi 26 -o mitm.aar .
+          cd mitm && go mod tidy && go test -v -timeout 90s ./... && go get golang.org/x/mobile && gomobile bind -target android -androidapi 26 -o mitm.aar .
       - name: Put AAR into app
         run: |
           mkdir -p app/libs

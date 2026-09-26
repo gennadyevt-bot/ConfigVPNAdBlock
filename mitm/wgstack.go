@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -42,6 +44,10 @@ func startWgUpstream(fd int64, mtu int64, localIP string) error {
 	stopWgUpstreamLocked()
 	if fd < 0 {
 		return fmt.Errorf("wg fd invalid: %d", fd)
+	}
+	if err := unix.SetNonblock(int(fd), true); err != nil {
+		unix.Close(int(fd))
+		return fmt.Errorf("wg nonblock: %w", err)
 	}
 	f := os.NewFile(uintptr(fd), "wg-tun")
 	if f == nil {
@@ -156,8 +162,13 @@ func wgDialTCP(addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	protocol := ipv6.ProtocolNumber
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+		protocol = ipv4.ProtocolNumber
+	}
 	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(ip), Port: port}
-	return gonet.DialTCP(st, fa, ipv4.ProtocolNumber)
+	return gonet.DialTCP(st, fa, protocol)
 }
 
 func wgDialUDP(addr string) (net.Conn, error) {
@@ -173,8 +184,13 @@ func wgDialUDP(addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	protocol := ipv6.ProtocolNumber
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+		protocol = ipv4.ProtocolNumber
+	}
 	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(ip), Port: port}
-	return gonet.DialUDP(st, nil, &fa, ipv4.ProtocolNumber)
+	return gonet.DialUDP(st, nil, &fa, protocol)
 }
 
 func wgResolve(host string) (net.IP, error) {
