@@ -34,6 +34,7 @@ var (
 type wgUpstreamStack struct {
 	st    *stack.Stack
 	local string
+	f     *os.File
 }
 
 func startWgUpstream(fd int64, mtu int64, localIP string) error {
@@ -95,7 +96,7 @@ func startWgUpstream(fd int64, mtu int64, localIP string) error {
 		{Destination: header.IPv4EmptySubnet, NIC: 1},
 		{Destination: header.IPv6EmptySubnet, NIC: 1},
 	})
-	wgUpstream = &wgUpstreamStack{st: st, local: localIP}
+	wgUpstream = &wgUpstreamStack{st: st, local: localIP, f: f}
 	flowLog("UNIFIED_WG_UPSTREAM_READY local=" + localIP)
 	return nil
 }
@@ -103,6 +104,9 @@ func startWgUpstream(fd int64, mtu int64, localIP string) error {
 func stopWgUpstreamLocked() {
 	if wgUpstream != nil {
 		wgUpstream.st.Close()
+		if wgUpstream.f != nil {
+			wgUpstream.f.Close()
+		}
 		wgUpstream = nil
 	}
 }
@@ -154,7 +158,7 @@ func wgDialTCP(addr string) (net.Conn, error) {
 		return nil, err
 	}
 	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(ip), Port: port}
-	return gonet.DialTCP(st, fa, nil)
+	return gonet.DialTCP(st, fa, nil, ipv4.ProtocolNumber)
 }
 
 func wgDialUDP(addr string) (net.Conn, error) {
@@ -216,13 +220,13 @@ func buildDNSQueryA(host string) []byte {
 	}
 	qname = append(qname, 0)
 	msg := make([]byte, 12+len(qname)+4)
-	binary.BigEndian.PutUint16(msg[0:2], 0xCAB1) // ID
-	binary.BigEndian.PutUint16(msg[2:4], 0x0100) // RD
-	binary.BigEndian.PutUint16(msg[4:6], 1)      // QDCOUNT
+	binary.BigEndian.PutUint16(msg[0:2], 0xCAB1)
+	binary.BigEndian.PutUint16(msg[2:4], 0x0100)
+	binary.BigEndian.PutUint16(msg[4:6], 1)
 	copy(msg[12:], qname)
 	off := 12 + len(qname)
-	binary.BigEndian.PutUint16(msg[off:off+2], 1)   // QTYPE A
-	binary.BigEndian.PutUint16(msg[off+2:off+4], 1) // QCLASS IN
+	binary.BigEndian.PutUint16(msg[off:off+2], 1)
+	binary.BigEndian.PutUint16(msg[off+2:off+4], 1)
 	return msg
 }
 
@@ -241,8 +245,8 @@ func parseDNSA(msg []byte) (net.IP, error) {
 	if off >= len(msg) {
 		return nil, fmt.Errorf("dns: bad question")
 	}
-	off++  // null-terminator
-	off += 4 // QTYPE + QCLASS
+	off++
+	off += 4
 	for i := 0; i < ancount && off+12 <= len(msg); i++ {
 		if msg[off]&0xC0 == 0xC0 {
 			off += 2
