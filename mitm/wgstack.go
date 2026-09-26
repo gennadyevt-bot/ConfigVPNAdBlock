@@ -1,8 +1,7 @@
 package mitm
 
-// wgstack.go — исходящий gVisor-стек поверх WG socketpair (проект №4,
-// integration-unified-adblock). Когда активен, dialTCP/dialUDP движка идут
-// через WireGuard-туннель, а не через прямые защищённые сокеты:
+// wgstack.go — исходящий gVisor-стек поверх WG socketpair (проект №4).
+// Когда активен, dialTCP/dialUDP движка идут через WireGuard-туннель:
 // Apps -> TUN -> AdBlock filter/MITM -> WG stack -> WireGuard -> Internet.
 
 import (
@@ -158,7 +157,7 @@ func wgDialTCP(addr string) (net.Conn, error) {
 		return nil, err
 	}
 	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(ip), Port: port}
-	return gonet.DialTCP(st, fa, nil, ipv4.ProtocolNumber)
+	return gonet.DialTCP(st, fa, ipv4.ProtocolNumber)
 }
 
 func wgDialUDP(addr string) (net.Conn, error) {
@@ -178,8 +177,6 @@ func wgDialUDP(addr string) (net.Conn, error) {
 	return gonet.DialUDP(st, nil, &fa, ipv4.ProtocolNumber)
 }
 
-// wgResolve: hostname -> IP через DNS A-запрос через WG-стек (8.8.8.8:53).
-// Нужен, потому что в unified-режиме прямого интернета у процесса нет.
 func wgResolve(host string) (net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return ip, nil
