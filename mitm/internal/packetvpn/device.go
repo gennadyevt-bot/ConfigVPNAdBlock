@@ -10,7 +10,6 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"github.com/amnezia-vpn/amneziawg-go/tun"
-	"golang.org/x/sys/unix"
 )
 
 type packetTun struct {
