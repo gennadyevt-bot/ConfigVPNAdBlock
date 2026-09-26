@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"golang.org/x/sys/unix"
 	"sync"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
@@ -20,10 +21,14 @@ type packetTun struct {
 }
 
 func newPacketTun(fd, mtu int) (*packetTun, error) {
-	// БЕЗ unix.SetNonblock: wireguard-go RoutineReadFromTUN считает EAGAIN
-	// фатальной ошибкой ("Failed to read packet from TUN device") и закрывает
-	// device ещё до трафика. Socket со стороны WG engine — строго BLOCKING
-	// (Kotlin создаёт socketpair блокирующим).
+	// fd ДОЛЖЕН быть nonblocking: amneziawg-go device.Close() join-ит
+	// RoutineReadFromTUN, а close() не будит read(), заблокированный на
+	// blocking fd -> deadlock при остановке. EAGAIN в этой версии
+	// amneziawg-go НЕ фатален (регрессионный тест это фиксирует).
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
 	return &packetTun{file: os.NewFile(uintptr(fd), "vpn-packets"), mtu: mtu, events: make(chan tun.Event)}, nil
 }
 func (t *packetTun) File() *os.File           { return t.file }

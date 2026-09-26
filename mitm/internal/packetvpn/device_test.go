@@ -151,31 +151,13 @@ func TestProtectionBeforeUse(t *testing.T) {
 	}
 }
 
-// engineSideSocketPair: конец под newPacketTun — БЕЗ SOCK_NONBLOCK (как в
-// production, blocking обязателен для wireguard-go), тестовый конец —
-// nonblocking, чтобы работали SetReadDeadline.
-func engineSideSocketPair(t *testing.T) (int, *os.File) {
-	t.Helper()
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := unix.SetNonblock(fds[1], true); err != nil {
-		t.Fatal(err)
-	}
-	f := os.NewFile(uintptr(fds[1]), "test-packets-nb")
-	t.Cleanup(func() { f.Close() })
-	return fds[0], f
-}
-
-// Регрессия: packetTun БЕЗ немедленного пакета не должен убивать WG device.
-// wireguard-go RoutineReadFromTUN считает EAGAIN фатальным и закрывает device.
-// Сценарий: старт -> 500 мс тишины (device жив) -> пакет проходит end-to-end.
+// Регрессия: packetTun БЕЗ немедленного пакета не должен убивать WG device,
+// а пакет после простоя должен проходить end-to-end.
 func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 	k1, _ := ecdh.X25519().GenerateKey(rand.Reader)
 	k2, _ := ecdh.X25519().GenerateKey(rand.Reader)
 	startDev := func(key *ecdh.PrivateKey) (*device.Device, *os.File, int) {
-		fd, f := engineSideSocketPair(t)
+		fd, f := socketPair(t)
 		tun, err := newPacketTun(fd, 1280)
 		if err != nil {
 			t.Fatal(err)
@@ -214,10 +196,15 @@ func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// 1) IDLE: без пакетов 500 мс устройства НЕ должны самозакрыться (EAGAIN-баг)
+	// 1) IDLE: без пакетов 500 мс устройства НЕ должны самозакрыться
 	time.Sleep(500 * time.Millisecond)
-	// 2) пакет после простоя должен пройти end-to-end (первая отправка может
-	// уйти на handshake — дочитываемся со второй, как в roundtrip-тесте)
+	if _, err := d1.IpcGet(); err != nil {
+		t.Fatal("device closed while idle: ", err)
+	}
+	if _, err := d2.IpcGet(); err != nil {
+		t.Fatal("device closed while idle: ", err)
+	}
+	// 2) пакет после простоя должен пройти (первая отправка может уйти на handshake)
 	payload := []byte("after-idle-packet")
 	packet := make([]byte, 20+len(payload))
 	packet[0] = 0x45
@@ -228,24 +215,5 @@ func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 	copy(packet[16:20], []byte{10, 0, 0, 2})
 	copy(packet[20:], payload)
 	got := make([]byte, 1500)
-	readOnce := func() (int, error) {
-		f2.SetReadDeadline(time.Now().Add(10 * time.Second))
-		return f2.Read(got)
-	}
-	if _, err := f1.Write(packet); err != nil {
-		t.Fatal(err)
-	}
-	n, err := readOnce()
-	if err != nil {
-		if _, werr := f1.Write(packet); werr != nil {
-			t.Fatal(werr)
-		}
-		n, err = readOnce()
-	}
-	if err != nil {
-		t.Fatal("device died during idle (EAGAIN fatal read): ", err)
-	}
-	if !bytes.Equal(packet, got[:n]) {
-		t.Fatalf("packet changed: %x", got[:n])
-	}
+	awaitPacket(t, f2, packet, got)
 }
