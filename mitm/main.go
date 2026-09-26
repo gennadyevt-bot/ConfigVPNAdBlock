@@ -328,3 +328,9 @@ func SetWgUpstream(fd int64, mtu int64, localIP string) error { return startWgUp
 
 // ClearWgUpstream останавливает WG-upstream стек.
 func ClearWgUpstream() { stopWgUpstream() }
+
+// EnsureCA создаёт CA (ca.crt/ca.key) в dir, если его ещё нет. Без запуска прокси.
+func EnsureCA(dir string) error {
+	_, _, err := loadOrCreateCA(dir)
+	return err
+}

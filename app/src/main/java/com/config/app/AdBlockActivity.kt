@@ -4,11 +4,13 @@ import android.content.SharedPreferences
 import android.os.Bundle
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import java.io.File
+import kotlin.concurrent.thread
 
-// Phase B: экран «Блокировка рекламы». Переключатель хранит настройку
-// adblock_enabled; движок пока НЕ подключён (Phase C+), статус честный.
+// Экран «Блокировка рекламы»: движок beta7 интегрирован (DNS/SNI/HTTPS через VPN-тракт).
 class AdBlockActivity : AppCompatActivity() {
 
     private lateinit var prefs: SharedPreferences
@@ -21,29 +23,70 @@ class AdBlockActivity : AppCompatActivity() {
         prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
         sw = findViewById(R.id.swAdBlockMain)
         tvStatus = findViewById(R.id.tvAdBlockStatusMain)
-        sw.isChecked = prefs.getBoolean("adblock_enabled", false)
+        sw.isChecked = prefs.getBoolean("adblock_enabled", true)
         updateStatus()
         sw.setOnCheckedChangeListener { _, on ->
             prefs.edit().putBoolean("adblock_enabled", on).apply()
+            if (on) thread { runCatching { UnifiedAdBlock.startFromUi(this@AdBlockActivity) } }
             updateStatus()
         }
-        findViewById<android.view.View>(R.id.btnInstallCert).setOnClickListener {
-            Toast.makeText(this, "Появится после интеграции HTTPS-движка (Phase F)", Toast.LENGTH_LONG).show()
-        }
-        findViewById<android.view.View>(R.id.btnResetCert).setOnClickListener {
-            Toast.makeText(this, "Появится после интеграции HTTPS-движка (Phase F)", Toast.LENGTH_LONG).show()
-        }
-        findViewById<android.view.View>(R.id.btnAdBlockLog).setOnClickListener {
-            Toast.makeText(this, "Журнал появится вместе с движком (Phase C+)", Toast.LENGTH_LONG).show()
+        findViewById<android.view.View>(R.id.btnInstallCert).setOnClickListener { installCert() }
+        findViewById<android.view.View>(R.id.btnResetCert).setOnClickListener { resetCert() }
+        findViewById<android.view.View>(R.id.btnAdBlockLog).setOnClickListener { showLog() }
+    }
+
+    private fun installCert() {
+        thread {
+            try {
+                val dir = cacheDir
+                val f = File(dir, "ca.crt")
+                if (!f.exists()) {
+                    mitm.Mitm.ensureCA(dir.absolutePath)
+                }
+                val bytes = f.readBytes()
+                runOnUiThread {
+                    val i = android.security.KeyChain.createInstallIntent()
+                    i.putExtra(android.security.KeyChain.EXTRA_CERTIFICATE, bytes)
+                    i.putExtra(android.security.KeyChain.EXTRA_NAME, "Config VPN AdBlock CA")
+                    startActivity(i)
+                }
+            } catch (t: Throwable) {
+                runOnUiThread {
+                    Toast.makeText(this, "Ошибка сертификата: " + (t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
+    private fun resetCert() {
+        thread {
+            val deleted = listOf(File(cacheDir, "ca.crt"), File(cacheDir, "ca.key"))
+                .map { it.exists() && it.delete() }
+                .any { it }
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    if (deleted) "Сертификат сброшен. Переподключите VPN для генерации нового."
+                    else "Файлы CA не найдены (движок ещё не запускался?)",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun showLog() {
+        val lines = AdBlockLog.snapshot()
+        val text = if (lines.isEmpty()) "Журнал пуст. Включите VPN и подождите несколько секунд." else lines.joinToString("\n")
+        AlertDialog.Builder(this)
+            .setTitle("Журнал AdBlock")
+            .setMessage(text)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
     private fun updateStatus() {
-        val on = prefs.getBoolean("adblock_enabled", false)
-        tvStatus.text = if (on)
-            "Работает (DNS/сетевой фильтр)"
-        else
-            "Отключено"
+        val on = prefs.getBoolean("adblock_enabled", true)
+        tvStatus.text = if (on) "Включено (DNS/SNI/HTTPS фильтр)" else "Отключено"
         tvStatus.setTextColor(if (on) 0xFF8BC34A.toInt() else 0xFFB0BEC5.toInt())
     }
 }

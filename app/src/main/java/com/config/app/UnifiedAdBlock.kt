@@ -71,7 +71,41 @@ object UnifiedAdBlock {
                     })
                 }
                 mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath)
+                // HTTPS-фильтрация (MITM/SNI/AD_PAYLOAD_BLOCK) — без этого DNS-only.
+                runCatching { mitm.Mitm.setContentFilter(true) }
 
+                ready = true
+                marker("UNIFIED_ADBLOCK_READY")
+            } catch (t: Throwable) {
+                ready = false
+                marker("UNIFIED_ADBLOCK_ERROR " + (t.message ?: t.javaClass.simpleName))
+            }
+        }
+    }
+
+    // Запуск движка из UI (без VPN): без protect (VPN не активен), contentFilter включаем.
+    fun startFromUi(ctx: android.content.Context) {
+        if (running) return
+        running = true
+        ready = false
+        marker("UNIFIED_ADBLOCK_SOURCE " + SOURCE)
+        marker("UNIFIED_ADBLOCK_START")
+        engineThread = thread(name = "unified-adblock-engine") {
+            try {
+                val filesDir = ctx.filesDir
+                val assetDir = ctx.cacheDir
+                val blFile = java.io.File(filesDir, "blocklist.txt")
+                ctx.assets.open("blocklist.txt").use { input ->
+                    blFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                runCatching {
+                    ctx.assets.open("generic_cosmetic_rules.txt").use { input ->
+                        java.io.File(assetDir, "generic_cosmetic_rules.txt").outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+                mitm.Mitm.setAssetDir(assetDir.absolutePath)
+                mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath)
+                runCatching { mitm.Mitm.setContentFilter(true) }
                 ready = true
                 marker("UNIFIED_ADBLOCK_READY")
             } catch (t: Throwable) {
