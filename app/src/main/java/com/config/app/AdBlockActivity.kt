@@ -13,6 +13,10 @@ import kotlin.concurrent.thread
 // Экран «Блокировка рекламы»: движок beta7 интегрирован (DNS/SNI/HTTPS через VPN-тракт).
 class AdBlockActivity : AppCompatActivity() {
 
+    companion object {
+        private const val REQ_INSTALL_CERT = 42
+    }
+
     private lateinit var prefs: SharedPreferences
     private lateinit var sw: SwitchCompat
     private lateinit var tvStatus: TextView
@@ -48,13 +52,27 @@ class AdBlockActivity : AppCompatActivity() {
                     val i = android.security.KeyChain.createInstallIntent()
                     i.putExtra(android.security.KeyChain.EXTRA_CERTIFICATE, bytes)
                     i.putExtra(android.security.KeyChain.EXTRA_NAME, "Config VPN AdBlock CA")
-                    startActivity(i)
+                    startActivityForResult(i, REQ_INSTALL_CERT)
                 }
             } catch (t: Throwable) {
                 runOnUiThread {
                     Toast.makeText(this, "Ошибка сертификата: " + (t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
                 }
             }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_INSTALL_CERT && resultCode == RESULT_OK) {
+            // Android не даёт приложению включить сертификат самому (защита ОС).
+            // Ведём пользователя на экран сертификатов — там один тап.
+            Toast.makeText(
+                this,
+                "Сертификат установлен. Теперь ВКЛЮЧИТЕ его: вкладка «Пользовательские» → Config VPN AdBlock CA.",
+                Toast.LENGTH_LONG
+            ).show()
+            runCatching { startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) }
         }
     }
 
