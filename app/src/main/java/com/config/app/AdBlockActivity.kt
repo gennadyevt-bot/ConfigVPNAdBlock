@@ -32,7 +32,7 @@ class AdBlockActivity : AppCompatActivity() {
         }
         findViewById<android.view.View>(R.id.btnInstallCert).setOnClickListener { installCert() }
         findViewById<android.view.View>(R.id.btnResetCert).setOnClickListener { resetCert() }
-        findViewById<android.view.View>(R.id.btnAdBlockLog).setOnClickListener { showLog() }
+        findViewById<android.view.View>(R.id.btnAdBlockLog).setOnClickListener { startActivity(android.content.Intent(this, AdBlockJournalActivity::class.java)) }
         findViewById<android.view.View>(R.id.btnYandexBlocker).setOnClickListener { openYandexBlocker() }
         if (intent.getBooleanExtra("show_log", false)) showLog()
     }

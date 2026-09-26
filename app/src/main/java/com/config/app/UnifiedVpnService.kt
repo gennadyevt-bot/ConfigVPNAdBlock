@@ -106,6 +106,8 @@ class UnifiedVpnService : AndroidVpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        AdBlockLog.init(applicationContext)
+        AdBlockLog.add("VPN_SERVICE_CREATE")
         bindIntoGoBackend(this)
         startForegroundWith("VPN подключается…")
     }
@@ -227,6 +229,8 @@ class UnifiedVpnService : AndroidVpnService() {
             // Сначала запускаем proxy/CA/blocklist, затем подключаем стек и TUN.
             // Иначе первые пакеты проходят через движок без готового фильтра.
             val adbOn = getSharedPreferences("app_prefs", MODE_PRIVATE).getBoolean("adblock_enabled", false)
+            AdBlockLog.add("ADBLOCK_PREF enabled=" + adbOn)
+            if (!adbOn) AdBlockLog.add("UNIFIED_ADBLOCK_DISABLED pref=false")
             val engineReady = adbOn && UnifiedAdBlock.start(this)
             val wgAddr = Regex("(?im)^\\s*Address\\s*=\\s*([0-9A-Fa-f.:]+)").find(wgquick)?.groupValues?.get(1) ?: ""
             var inlineOk = false

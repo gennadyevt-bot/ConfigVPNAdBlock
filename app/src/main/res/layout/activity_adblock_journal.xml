@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0E1B12">
+
+    <ScrollView
+        android:id="@+id/journalScroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+        <TextView
+            android:id="@+id/tvJournal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="12dp"
+            android:textSize="11sp"
+            android:textColor="#DDE8DD"
+            android:typeface="monospace"
+            android:textIsSelectable="true" />
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:padding="8dp">
+        <Button android:id="@+id/btnJournalRefresh" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ОБНОВИТЬ" />
+        <Button android:id="@+id/btnJournalCopy" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="КОПИРОВАТЬ" android:layout_marginStart="8dp" />
+        <Button android:id="@+id/btnJournalClose" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ЗАКРЫТЬ" android:layout_marginStart="8dp" />
+    </LinearLayout>
+</LinearLayout>

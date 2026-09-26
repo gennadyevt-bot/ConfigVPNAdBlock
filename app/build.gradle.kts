@@ -10,8 +10,8 @@ android {
         applicationId = "com.config.vpnadblock"
         minSdk = 26
         targetSdk = 36
-        versionCode = 15
-        versionName = "6.0.0-alpha15"
+        versionCode = 16
+        versionName = "6.0.0-alpha16"
     }
 
     signingConfigs {
