@@ -904,7 +904,7 @@ func (s *sniffConn) Read(p []byte) (int, error) {
 // не отправляя ничего в ответ. Возвращает сырые байты + разобранные
 // SNI и ALPN. Ошибка = не TLS/таймаут — вызывающий сам решает.
 func peekClientHello(conn net.Conn) (raw []byte, sni string, alpn []string, err error) {
-	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second)) // было 15с: не-TLS соединения висели 15с до relay
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	need := 5
 	for len(raw) < need {
