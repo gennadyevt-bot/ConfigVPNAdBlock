@@ -95,6 +95,15 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         applyReleaseInsets()
+        // edge-to-edge (Android 15): insets до ivMenu не доходят (DrawerLayout
+        // потребляет) — ставим отступ от статус-бара напрямую, детерминированно.
+        findViewById<android.view.View>(R.id.ivMenu)?.let { menu ->
+            val sbId = resources.getIdentifier("status_bar_height", "dimen", "android")
+            val sb = if (sbId > 0) resources.getDimensionPixelSize(sbId) else 0
+            val m16 = (16 * resources.displayMetrics.density).toInt()
+            (menu.layoutParams as android.widget.FrameLayout.LayoutParams).topMargin = sb + m16
+            menu.layoutParams = menu.layoutParams
+        }
 
         vpnManager = VpnManager.getInstance(this)
         serverStorage = ServerStorage(this)
