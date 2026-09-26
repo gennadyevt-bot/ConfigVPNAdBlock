@@ -43,12 +43,12 @@ func startWgUpstream(fd int64, mtu int64, localIP string) error {
 	defer wgUpstreamMu.Unlock()
 	stopWgUpstreamLocked()
 	if fd < 0 {
+		flowLog("WG_UPSTREAM_ERR invalid_fd")
 		return fmt.Errorf("wg fd invalid: %d", fd)
 	}
-	if err := unix.SetNonblock(int(fd), true); err != nil {
-		unix.Close(int(fd))
-		return fmt.Errorf("wg nonblock: %w", err)
-	}
+	// НЕ вызываем unix.SetNonblock: dup(fd) разделяет open file description
+	// с packetvpn/WG engine — nonblocking там убивает wireguard-go (EAGAIN fatal).
+	// gVisor upstream работает на blocking fd.
 	f := os.NewFile(uintptr(fd), "wg-tun")
 	if f == nil {
 		return fmt.Errorf("wg fd open failed: %d", fd)
@@ -102,12 +102,14 @@ func startWgUpstream(fd int64, mtu int64, localIP string) error {
 		{Destination: header.IPv6EmptySubnet, NIC: 1},
 	})
 	wgUpstream = &wgUpstreamStack{st: st, local: localIP, f: f}
+	flowLog("WG_UPSTREAM_START local=" + localIP)
 	flowLog("UNIFIED_WG_UPSTREAM_READY local=" + localIP)
 	return nil
 }
 
 func stopWgUpstreamLocked() {
 	if wgUpstream != nil {
+		flowLog("WG_UPSTREAM_STOP local=" + wgUpstream.local)
 		wgUpstream.st.Close()
 		if wgUpstream.f != nil {
 			wgUpstream.f.Close()

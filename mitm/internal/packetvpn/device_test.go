@@ -150,3 +150,87 @@ func TestProtectionBeforeUse(t *testing.T) {
 		}
 	}
 }
+
+// blockingSocketPair — socketpair БЕЗ SOCK_NONBLOCK (как в production).
+func blockingSocketPair(t *testing.T) (int, *os.File) {
+	t.Helper()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := os.NewFile(uintptr(fds[1]), "test-packets-blocking")
+	t.Cleanup(func() { f.Close() })
+	return fds[0], f
+}
+
+// Регрессия: packetTun БЕЗ немедленного пакета не должен убивать WG device.
+// wireguard-go RoutineReadFromTUN считает EAGAIN фатальным и закрывает device.
+// Сценарий: старт -> 500 мс тишины (device жив) -> пакет проходит end-to-end.
+func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
+	k1, _ := ecdh.X25519().GenerateKey(rand.Reader)
+	k2, _ := ecdh.X25519().GenerateKey(rand.Reader)
+	startDev := func(key *ecdh.PrivateKey) (*device.Device, *os.File, int) {
+		fd, f := blockingSocketPair(t)
+		tun, err := newPacketTun(fd, 1280)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := device.NewDevice(tun, struct{ conn.Bind }{conn.NewStdNetBind()}, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf}, false, func(device.StatusCode) {})
+		t.Cleanup(d.Close)
+		if err := d.IpcSet(fmt.Sprintf("private_key=%x\n", key.Bytes())); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.Up(); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := d.IpcGet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var port int
+		for _, line := range strings.Split(cfg, "\n") {
+			if strings.HasPrefix(line, "listen_port=") {
+				fmt.Sscanf(line, "listen_port=%d", &port)
+			}
+		}
+		if port == 0 {
+			t.Fatal("missing UDP listener")
+		}
+		return d, f, port
+	}
+	d1, f1, p1 := startDev(k1)
+	d2, f2, p2 := startDev(k2)
+	for _, peer := range []struct {
+		d    *device.Device
+		key  *ecdh.PrivateKey
+		port int
+	}{{d1, k2, p2}, {d2, k1, p1}} {
+		if err := peer.d.IpcSet(fmt.Sprintf("public_key=%x\nendpoint=127.0.0.1:%d\nallowed_ip=0.0.0.0/0\n", peer.key.PublicKey().Bytes(), peer.port)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 1) IDLE: без пакетов 500 мс устройства НЕ должны самозакрыться (EAGAIN-баг)
+	time.Sleep(500 * time.Millisecond)
+	// 2) пакет после простоя должен пройти end-to-end
+	payload := []byte("after-idle-packet")
+	packet := make([]byte, 20+len(payload))
+	packet[0] = 0x45
+	packet[8] = 64
+	packet[9] = 253
+	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+	copy(packet[12:16], []byte{10, 0, 0, 1})
+	copy(packet[16:20], []byte{10, 0, 0, 2})
+	copy(packet[20:], payload)
+	f2.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := f1.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 1500)
+	n, err := f2.Read(got)
+	if err != nil {
+		t.Fatal("device died during idle (EAGAIN fatal read): ", err)
+	}
+	if !bytes.Equal(packet, got[:n]) {
+		t.Fatalf("packet changed: %x", got[:n])
+	}
+}

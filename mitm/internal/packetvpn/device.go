@@ -21,10 +21,10 @@ type packetTun struct {
 }
 
 func newPacketTun(fd, mtu int) (*packetTun, error) {
-	if err := unix.SetNonblock(fd, true); err != nil {
-		unix.Close(fd)
-		return nil, err
-	}
+	// БЕЗ unix.SetNonblock: wireguard-go RoutineReadFromTUN считает EAGAIN
+	// фатальной ошибкой ("Failed to read packet from TUN device") и закрывает
+	// device ещё до трафика. Socket со стороны WG engine — строго BLOCKING
+	// (Kotlin создаёт socketpair блокирующим).
 	return &packetTun{file: os.NewFile(uintptr(fd), "vpn-packets"), mtu: mtu, events: make(chan tun.Event)}, nil
 }
 func (t *packetTun) File() *os.File           { return t.file }
