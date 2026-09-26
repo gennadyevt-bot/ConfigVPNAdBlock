@@ -135,6 +135,7 @@ class UnifiedVpnService : AndroidVpnService() {
         var handle: Int = -1
         @Volatile var running = false
         @Volatile var rxBytes = 0L
+        @Volatile var inlineEngine = false
     }
 
     private fun startDatapath(intent: Intent): Boolean {
@@ -195,7 +196,29 @@ class UnifiedVpnService : AndroidVpnService() {
             d.running = true
             runCatching { val s = WgGoReflex.socketV4(handle); if (s >= 0) protect(s) }
             runCatching { val s = WgGoReflex.socketV6(handle); if (s >= 0) protect(s) }
-            startForwarder(d)
+            // AdBlock engine В ТРАКТЕ: TUN -> Go filter/MITM -> WG stack -> WireGuard.
+            // Один TUN, один VpnService. При ошибке — откат на PacketForwarder.
+            val wgAddr = Regex("(?im)^\\s*Address\\s*=\\s*([0-9A-Fa-f.:]+)").find(wgquick)?.groupValues?.get(1) ?: ""
+            var inlineOk = false
+            if (wgAddr.isNotEmpty()) {
+                val appFdInt = runCatching { ParcelFileDescriptor.dup(d.appFd).detachFd() }.getOrDefault(-1)
+                val wgFdInt2 = runCatching { ParcelFileDescriptor.dup(d.wgLocal).detachFd() }.getOrDefault(-1)
+                inlineOk = appFdInt >= 0 && wgFdInt2 >= 0 && runCatching {
+                    mitm.Mitm.setWgUpstream(wgFdInt2.toLong(), mtu.toLong(), wgAddr)
+                    thread(name = "cvab-inline-engine", isDaemon = true) {
+                        runCatching { mitm.Mitm.startTunnel(appFdInt.toLong(), mtu.toLong()) }
+                    }
+                    true
+                }.getOrDefault(false)
+            }
+            if (inlineOk) {
+                d.inlineEngine = true
+                AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_ON addr=$wgAddr mtu=$mtu")
+            } else {
+                runCatching { mitm.Mitm.clearWgUpstream() }
+                AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_FALLBACK packet-forwarder")
+                startForwarder(d)
+            }
             AdBlockLog.add("ADBLOCK: ACTIVE mtu=$mtu routes=" + routes.take(60))
             runCatching { UnifiedAdBlock.start(this) }
                 .onFailure { AdBlockLog.add("UNIFIED_ADBLOCK_ERROR " + (it.message ?: it.javaClass.simpleName)) }
@@ -257,6 +280,10 @@ class UnifiedVpnService : AndroidVpnService() {
     private fun stopDatapath() {
         runCatching { UnifiedAdBlock.stop() }
         val d = dp ?: return
+        if (d.inlineEngine) {
+            runCatching { mitm.Mitm.stopTunnel() }
+            runCatching { mitm.Mitm.clearWgUpstream() }
+        }
         dp = null
         d.running = false
         runCatching { if (d.handle >= 0) WgGoReflex.turnOff(d.handle) }

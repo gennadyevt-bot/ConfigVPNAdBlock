@@ -92,6 +92,9 @@ func protectedControl() func(string, string, syscall.RawConn) error {
 }
 
 func dialTCP(addr string) (net.Conn, error) {
+	if wgUpstreamActive() {
+		return wgDialTCP(addr)
+	}
 	d := net.Dialer{Timeout: 10 * time.Second, Control: protectedControl()}
 	return d.Dial("tcp", addr)
 }
@@ -105,6 +108,9 @@ func dialLocal(addr string) (net.Conn, error) {
 }
 
 func dialUDP(addr string) (net.Conn, error) {
+	if wgUpstreamActive() {
+		return wgDialUDP(addr)
+	}
 	d := net.Dialer{Timeout: 4 * time.Second, Control: protectedControl()}
 	return d.Dial("udp", addr)
 }

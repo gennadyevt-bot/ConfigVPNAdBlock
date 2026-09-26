@@ -321,3 +321,10 @@ func StopProxy() {
 		proxySrv = nil
 	}
 }
+
+// SetWgUpstream включает исходящий стек через WG socketpair (проект №4):
+// исходящие dialTCP/dialUDP движка пойдут через WireGuard.
+func SetWgUpstream(fd int64, mtu int64, localIP string) error { return startWgUpstream(fd, mtu, localIP) }
+
+// ClearWgUpstream останавливает WG-upstream стек.
+func ClearWgUpstream() { stopWgUpstream() }
