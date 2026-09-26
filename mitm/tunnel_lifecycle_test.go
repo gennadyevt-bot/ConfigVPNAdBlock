@@ -18,7 +18,7 @@ func TestWgUpstreamIPv4Packet(t *testing.T) {
 	}
 	peer := os.NewFile(uintptr(fds[1]), "upstream-peer")
 	defer peer.Close()
-	if err := startWgUpstream(int64(fds[0]), 1280, "10.0.0.2"); err != nil {
+	if err := startWgUpstream(int64(fds[0]), 1280, "10.0.0.2", "")); err != nil {
 		t.Fatal(err)
 	}
 	defer stopWgUpstream()
