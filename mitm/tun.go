@@ -1393,6 +1393,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		// Апстрим — по ИСХОДНОМУ IP назначения из TUN (hp). DNS не нужен:
 		// браузер уже резолвил этот IP, а резолвер gomobile системного
 		// resolv.conf в VPN-контексте не видит.
+		stg0 := time.Now()
 		up, err := dialTCP(hp)
 		if err != nil {
 			// Резерв: DoT-резолв имени из Host (тот же путь, что у самотеста)
@@ -1417,6 +1418,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		}
 		atomic.AddInt64(&upDialOk, 1)
 		flowLog(fmt.Sprintf("#%d upDial ok %s", fid, hp))
+		dialMs := time.Since(stg0).Milliseconds()
 		upTLS := tls.Client(up, &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12})
 		if err := upTLS.Handshake(); err != nil {
 			atomic.AddInt64(&upTLSFail, 1)
@@ -1429,6 +1431,8 @@ func handle443(conn adapter.TCPConn, hp string) {
 		}
 		atomic.AddInt64(&upTLSOk, 1)
 		flowLog(fmt.Sprintf("#%d upTLS ok", fid))
+		stgTotal := time.Since(stg0).Milliseconds()
+		flowLog(fmt.Sprintf("#%d STAGE updial=%dms uptls=%dms total=%dms", fid, dialMs, stgTotal-dialMs, stgTotal))
 		req.URL.Scheme = "https"
 		if strings.Contains(host, ":") {
 			req.URL.Host = host
