@@ -1198,6 +1198,17 @@ func handle443(conn adapter.TCPConn, hp string) {
 			return
 		}
 	}
+	// generic pipeline (как в рабочем socks5.go): любой непустой SNI ->
+	// handleGenericMITM (GENERIC_MITM_BEGIN/OK, AD_PAYLOAD_BLOCK, generic
+	// HTML/cosmetic). handled=false -> существующий DIRECT fail-open ниже.
+	if perr == nil && contentFilterEnabled() && peekSNI != "" {
+		flowLog(fmt.Sprintf("#%d GENERIC_MITM_BEGIN sni=%q dst=%s", fid, peekSNI, hp))
+		handled, _ := handleGenericMITM(conn, peekSNI, raw)
+		if handled {
+			closeReason = "genericMitm"
+			return
+		}
+	}
 	if perr != nil {
 		addSNILog("DIRECT", "(no-sni) "+hp)
 		flowLog(fmt.Sprintf("#%d SAFE_DIRECT_UNKNOWN dst=%s peek=%v", fid, hp, perr))
