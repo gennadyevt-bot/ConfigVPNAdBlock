@@ -41,25 +41,15 @@ func loadOrCreateCA(dir string) (tls.Certificate, []byte, error) {
 	certPEM, certErr := os.ReadFile(certPath)
 	keyPEM, keyErr := os.ReadFile(keyPath)
 	if certErr == nil && keyErr == nil {
+		// СТАБИЛЬНОСТЬ ВАЖНЕЕ ИМЕНИ: существующий CA загружаем ВСЕГДА,
+		// без регенерации по имени. Иначе каждый перегенерированный ключ
+		// обесценивает уже установленный пользователем сертификат
+		// (unknown certificate -> реклама проходит).
 		cert, err := tls.X509KeyPair(certPEM, keyPEM)
 		if err != nil {
 			return tls.Certificate{}, nil, err
 		}
-		// Регенерация, если CA старого имени: коллизия с сертификатом
-		// ConfigAdBlock в системном хранилище (одинаковое имя, другой ключ)
-		// даёт "unknown certificate" на каждый MITM.
-		if len(cert.Certificate) > 0 {
-			if parsed, perr := x509.ParseCertificate(cert.Certificate[0]); perr == nil && parsed.Subject.CommonName == caCommonName {
-				return cert, certPEM, nil
-			}
-			// старое имя -> УДАЛЯЕМ файлы и падаем в генерацию ниже.
-			// Просто "fall through" нельзя: блок "Never silently replace"
-			// вернёт ошибку "cannot load existing CA" и убьёт старт движка.
-			os.Remove(certPath)
-			os.Remove(keyPath)
-		} else {
-			return cert, certPEM, nil
-		}
+		return cert, certPEM, nil
 	}
 	// Never silently replace a CA already installed by the user.
 	if !os.IsNotExist(certErr) || !os.IsNotExist(keyErr) {
