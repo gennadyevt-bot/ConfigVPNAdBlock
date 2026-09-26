@@ -213,8 +213,42 @@ func wgDNSServer() tcpip.Address {
 	return tcpip.AddrFrom4([4]byte{8, 8, 8, 8})
 }
 
+// DNS-кэш: без него каждый новый HTTPS-апстрим резолвит имя через туннель
+// (лишний RTT на каждый хост -> "с VPN+AdBlock сайты открываются с трудом").
+var (
+	wgDNSCacheMu sync.Mutex
+	wgDNSCache   = map[string]wgDNSEntry{}
+)
+
+type wgDNSEntry struct {
+	ip      net.IP
+	expires time.Time
+}
+
+func wgResolveCached(host string) (net.IP, bool) {
+	wgDNSCacheMu.Lock()
+	defer wgDNSCacheMu.Unlock()
+	e, ok := wgDNSCache[host]
+	if ok && time.Now().Before(e.expires) {
+		return e.ip, true
+	}
+	if ok {
+		delete(wgDNSCache, host)
+	}
+	return nil, false
+}
+
+func wgResolveCachePut(host string, ip net.IP) {
+	wgDNSCacheMu.Lock()
+	wgDNSCache[host] = wgDNSEntry{ip: ip, expires: time.Now().Add(120 * time.Second)}
+	wgDNSCacheMu.Unlock()
+}
+
 func wgResolve(host string) (net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
+		return ip, nil
+	}
+	if ip, ok := wgResolveCached(host); ok {
 		return ip, nil
 	}
 	st := wgStackRef()
@@ -227,7 +261,7 @@ func wgResolve(host string) (net.IP, error) {
 		return nil, fmt.Errorf("wg dns dial: %w", err)
 	}
 	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(2500 * time.Millisecond))
+	_ = c.SetDeadline(time.Now().Add(2000 * time.Millisecond))
 	if _, err := c.Write(buildDNSQueryA(host)); err != nil {
 		return nil, err
 	}
@@ -237,7 +271,12 @@ func wgResolve(host string) (net.IP, error) {
 		flowLog("WG_UPSTREAM_DNS_ERR host=" + host + " err=" + err.Error())
 		return nil, err
 	}
-	return parseDNSA(buf[:n])
+	ip, err := parseDNSA(buf[:n])
+	if err != nil {
+		return nil, err
+	}
+	wgResolveCachePut(host, ip)
+	return ip, nil
 }
 
 func buildDNSQueryA(host string) []byte {
