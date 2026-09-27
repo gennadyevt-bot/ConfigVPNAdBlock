@@ -102,6 +102,11 @@ class VpnManager private constructor(private val context: Context) {
                 }
 
                 withContext(Dispatchers.Main) {
+                    if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                            .getBoolean("adblock_enabled", false) &&
+                        (!UnifiedVpnService.active || !UnifiedAdBlock.ready)) {
+                        throw IllegalStateException("AdBlock остановился во время подключения")
+                    }
                     updateStatus(VpnStatus.CONNECTED)
                     StopVpnWidget.updateWidget(context, VpnStatus.CONNECTED)
                 }
@@ -245,6 +250,16 @@ class VpnManager private constructor(private val context: Context) {
                     showToast("Ошибка: $err")
                 }
             }
+        }
+    }
+
+    // Called on the main thread by the service. KeepAlive can now see an
+    // unexpected loss and restore the saved session instead of trusting stale UI.
+    fun onUnifiedStopped(reason: String) {
+        AdBlockLog.add("VPN_DATAPATH_STOPPED reason=$reason status=$globalStatus")
+        if (globalStatus == VpnStatus.CONNECTED) {
+            updateStatus(VpnStatus.DISCONNECTED)
+            StopVpnWidget.updateWidget(context, VpnStatus.DISCONNECTED)
         }
     }
 

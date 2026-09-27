@@ -37,6 +37,24 @@ class AdBlockActivity : AppCompatActivity() {
         if (intent.getBooleanExtra("show_log", false)) showLog()
     }
 
+    private val statusHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val statusRefresh = object : Runnable {
+        override fun run() {
+            updateStatus()
+            statusHandler.postDelayed(this, 1000)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        statusHandler.post(statusRefresh)
+    }
+
+    override fun onPause() {
+        statusHandler.removeCallbacks(statusRefresh)
+        super.onPause()
+    }
+
     private fun openYandexBlocker() {
         val actions = listOf(
             "com.yandex.browser.contentBlocker.ACTION_SETTING",
@@ -122,9 +140,9 @@ class AdBlockActivity : AppCompatActivity() {
         val on = prefs.getBoolean("adblock_enabled", false)
         tvStatus.text = when {
             !on -> "Отключено"
-            UnifiedAdBlock.ready -> "HTTPS-фильтр работает"
-            else -> "Выбрано: включить. Переподключите VPN и проверьте журнал"
+            UnifiedVpnService.active && UnifiedAdBlock.ready -> "Фильтр запущен • результаты в журнале"
+            else -> "AdBlock НЕ работает • движок не запущен"
         }
-        tvStatus.setTextColor(if (UnifiedAdBlock.ready) 0xFF8BC34A.toInt() else 0xFFB0BEC5.toInt())
+        tvStatus.setTextColor(if (UnifiedVpnService.active && UnifiedAdBlock.ready) 0xFF8BC34A.toInt() else 0xFFB0BEC5.toInt())
     }
 }

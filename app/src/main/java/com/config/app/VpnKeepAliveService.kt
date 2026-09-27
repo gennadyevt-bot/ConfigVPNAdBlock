@@ -56,6 +56,9 @@ class VpnKeepAliveService : Service() {
             }
         }
 
+        // Repeated startService calls must not accumulate reconnect timers.
+        checkRunnable?.let { handler.removeCallbacks(it) }
+        statusTicker?.let { handler.removeCallbacks(it) }
         // Периодическая проверка — переподключаем если VPN упал
         startKeepAliveCheck()
         // Ненавязчивый индикатор: текст уведомления показывает прогресс подключения

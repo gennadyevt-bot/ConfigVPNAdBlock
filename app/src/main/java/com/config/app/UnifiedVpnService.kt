@@ -24,7 +24,10 @@ class UnifiedVpnService : AndroidVpnService() {
         const val ACTION_STOP = "com.config.vpnadblock.UNIFIED_STOP"
         const val ACTION_CONNECT = "com.config.vpnadblock.UNIFIED_CONNECT"
         private const val CHANNEL_ID = "unified_vpn"
-        private const val NOTIF_ID = 1001
+        private const val NOTIF_ID = 1002
+
+        @Volatile var active: Boolean = false
+            private set
 
         // Результат старта привязан к request_id (ConcurrentHashMap<rid, future>).
         // Старый общий перезаписываемый readyFuture давал гонку: повторный
@@ -93,6 +96,7 @@ class UnifiedVpnService : AndroidVpnService() {
     }
 
     private var dp: Datapath? = null
+    @Volatile private var stopping = false
 
     override fun onCreate() {
         super.onCreate()
@@ -106,11 +110,12 @@ class UnifiedVpnService : AndroidVpnService() {
         bindIntoGoBackend(this)
         when (intent?.action) {
             ACTION_STOP -> {
+                stopping = true
                 requestIds.incrementAndGet()
                 // завершить ВСЕ ожидающие future, а не один общий
                 readyFutures.forEach { (_, f) -> f.complete(false) }
                 readyFutures.clear()
-                stopDatapath()
+                stopDatapath("ACTION_STOP")
                 stopSelf()
             }
             ACTION_CONNECT -> {
@@ -119,8 +124,16 @@ class UnifiedVpnService : AndroidVpnService() {
                 AdBlockLog.add("ADBLOCK: CONNECT_DISPATCH rid=" + requestId)
                 thread(name = "adblock-datapath") {
                     synchronized(this) {
+                        if (stopping || request == null || request.isDone) {
+                            if (request != null) {
+                                readyFutures.remove(requestId, request)
+                                request.complete(false)
+                            }
+                            AdBlockLog.add("ADBLOCK: CONNECT_CANCELLED rid=$requestId")
+                            return@synchronized
+                        }
                         val existing = dp
-                        if (existing != null && existing.running) {
+                        if (existing != null && existing.running && UnifiedAdBlock.running && UnifiedAdBlock.ready) {
                             // datapath уже поднят (INLINE_ON/ACTIVE) — для этого
                             // запроса честный true, а не timeout чужого future.
                             readyFutures.remove(requestId, request)
@@ -128,24 +141,43 @@ class UnifiedVpnService : AndroidVpnService() {
                             AdBlockLog.add("ADBLOCK: CONNECT_COMPLETE rid=" + requestId + " ok=true cached")
                             return@synchronized
                         }
-                        val ok = startDatapath(intent)
+                        val started = startDatapath(intent)
+                        val ok = started && !stopping && !request.isDone
                         readyFutures.remove(requestId, request)
                         request?.complete(ok)
                         AdBlockLog.add("ADBLOCK: CONNECT_COMPLETE rid=" + requestId + " ok=" + ok)
-                        if (!ok) stopDatapath()
-                        startForegroundWith(if (ok) "VPN активен • AdBlock работает" else "VPN: ошибка подключения")
+                        if (!ok) stopDatapath("START_FAILED")
+                        startForegroundWith(if (ok) "VPN подключён • фильтр запущен" else "VPN: ошибка подключения")
                     }
                 }
             }
-            else -> startForegroundWith("VPN активен • AdBlock: не подключён")
+            else -> {
+                startForegroundWith(if (active) "VPN подключён • фильтр запущен" else "VPN: ожидание подключения")
+                if (intent == null && VpnStateStorage(this).wasConnected()) {
+                    AdBlockLog.add("VPN_SERVICE_RESTORE requested")
+                    // KeepAlive restores the saved server; an empty sticky restart
+                    // must not pretend that a new native datapath already exists.
+                    startForegroundService(Intent(this, VpnKeepAliveService::class.java))
+                }
+            }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        stopDatapath()
+        stopping = true
+        AdBlockLog.add("VPN_SERVICE_DESTROY")
+        stopDatapath("SERVICE_DESTROY")
         try { stopForeground(true) } catch (_: Exception) {}
         super.onDestroy()
+    }
+
+    override fun onRevoke() {
+        stopping = true
+        AdBlockLog.add("VPN_PERMISSION_REVOKED")
+        VpnStateStorage(this).setWasConnected(false)
+        stopDatapath("VPN_REVOKED")
+        stopSelf()
     }
 
     // ---------------- Phase D datapath ----------------
@@ -162,7 +194,7 @@ class UnifiedVpnService : AndroidVpnService() {
 
     @Synchronized
     private fun startDatapath(intent: Intent): Boolean {
-        stopDatapath()
+        stopDatapath("REPLACE_DATAPATH")
         return try {
             DnsFilter.load(applicationContext)
             val name = (intent.getStringExtra("name") ?: "cvab").take(24)
@@ -244,26 +276,41 @@ class UnifiedVpnService : AndroidVpnService() {
             mitm.Mitm.setWgUpstream(ParcelFileDescriptor.dup(d.wgLocal).detachFd().toLong(), mtu.toLong(), wgAddr, wgDns)
             mitm.Mitm.startTunnel(ParcelFileDescriptor.dup(d.appFd).detachFd().toLong(), mtu.toLong())
             d.inlineEngine = true
+            active = true
             AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_ON addr=$wgAddr mtu=$mtu")
             AdBlockLog.add("ADBLOCK: ACTIVE mtu=$mtu routes=" + routes.take(60))
             true
         } catch (e: Throwable) {
             AdBlockLog.add("ADBLOCK: ERROR " + (e.message ?: e.javaClass.simpleName))
-            stopDatapath()
+            stopDatapath("START_EXCEPTION")
             false
         }
     }
 
     private fun failDp(why: String): Boolean {
         AdBlockLog.add("ADBLOCK: ERROR $why")
-        stopDatapath()
+        stopDatapath("START_FAILED: $why")
         return false
     }
 
     @Synchronized
-    private fun stopDatapath() {
-        runCatching { UnifiedAdBlock.stop() }
+    private fun stopDatapath(reason: String) {
+        // An idle/old service must not stop the process-wide engine owned by
+        // a different service instance.
         val d = dp ?: return
+        active = false
+        AdBlockLog.add("DATAPATH_STOP reason=$reason")
+        runCatching {
+            AdBlockLog.add("LAST_TUN " + mitm.Mitm.tunStats())
+            AdBlockLog.add("LAST_MITM " + mitm.Mitm.mitmStats())
+            AdBlockLog.add("LAST_FLOW " + mitm.Mitm.flowLog())
+        }
+        runCatching { UnifiedAdBlock.stop() }
+        if (reason != "REPLACE_DATAPATH") {
+            android.os.Handler(mainLooper).post {
+                if (!active) VpnManager.getInstance(applicationContext).onUnifiedStopped(reason)
+            }
+        }
         if (d.packetEngine) {
             runCatching { mitm.Mitm.stopTunnel() }
             runCatching { mitm.Mitm.clearWgUpstream() }
