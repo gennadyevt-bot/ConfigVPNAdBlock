@@ -58,15 +58,11 @@ class VpnManager private constructor(private val context: Context) {
         return VpnService.prepare(context) == null
     }
 
-    // Защита от конкурентных connect() (wasConnected + AutoConnect + KeepAlive
-    // могут дёрнуть одновременно) — повторный вход игнорируется до завершения.
-    private val connectInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
-
     fun connect(server: ServerInfo) {
-        if (!connectInProgress.compareAndSet(false, true)) {
-            android.util.Log.w("ConfigVPN", "connect: already in progress, duplicate ignored")
-            return
-        }
+        // БЕЗ guard'а от параллельных входов: он застревал после обрыва сессии
+        // и молча глушил все повторные connect'ы (VPN не поднимался вообще).
+        // Гонка запросов решается на уровне request_id в UnifiedVpnService.
+        android.util.Log.i("ConfigVPN", "connect: call server=" + server.name)
         scope.launch {
             try {
                 val prepareIntent = VpnService.prepare(context)
@@ -118,8 +114,6 @@ class VpnManager private constructor(private val context: Context) {
                     StopVpnWidget.updateWidget(context, VpnStatus.ERROR)
                     showToast("Ошибка: $err")
                 }
-            } finally {
-                connectInProgress.set(false)
             }
         }
     }
