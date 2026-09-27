@@ -4,6 +4,7 @@ import (
 	"configadblock/mitm/internal/packetvpn"
 	"fmt"
 	"github.com/amnezia-vpn/amneziawg-go/device"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -50,4 +51,49 @@ func StopPacketVPN() {
 		packetVPN.Close()
 		packetVPN = nil
 	}
+}
+
+// Only export an allowlist of numeric health fields: IpcGet also contains keys.
+func packetVPNHealth(settings string) string {
+	var peers, tx, rx, handshake int64
+	for _, line := range strings.Split(settings, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		if key == "public_key" {
+			peers++
+			continue
+		}
+		switch key {
+		case "tx_bytes", "rx_bytes", "last_handshake_time_sec":
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || n < 0 {
+				continue
+			}
+			switch key {
+			case "tx_bytes":
+				tx += n
+			case "rx_bytes":
+				rx += n
+			case "last_handshake_time_sec":
+				if n > handshake {
+					handshake = n
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("peers=%d tx_bytes=%d rx_bytes=%d handshake_unix=%d", peers, tx, rx, handshake)
+}
+func PacketVPNStats() string {
+	packetVPNMu.Lock()
+	defer packetVPNMu.Unlock()
+	if packetVPN == nil {
+		return "packetVPN: stopped"
+	}
+	settings, err := packetVPN.IpcGet()
+	if err != nil {
+		return "packetVPN: stats unavailable"
+	}
+	return packetVPNHealth(settings)
 }

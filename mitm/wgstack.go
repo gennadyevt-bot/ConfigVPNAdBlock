@@ -5,6 +5,7 @@ package mitm
 // Apps -> TUN -> AdBlock filter/MITM -> WG stack -> WireGuard -> Internet.
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -12,8 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
-
 
 	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -32,10 +33,41 @@ var (
 )
 
 type wgUpstreamStack struct {
-	st    *stack.Stack
-	local string
-	dns   string
-	f     *os.File
+	st     *stack.Stack
+	local  string
+	dns    string
+	f      *os.File
+	counts *wgPacketCounter
+}
+
+// Separate decrypted upstream packets from application TUN counters.
+type wgPacketCounter struct {
+	f  *os.File
+	rx atomic.Int64
+	tx atomic.Int64
+}
+
+func (c *wgPacketCounter) Read(p []byte) (int, error) {
+	n, err := c.f.Read(p)
+	if n > 0 {
+		c.rx.Add(1)
+	}
+	return n, err
+}
+func (c *wgPacketCounter) Write(p []byte) (int, error) {
+	n, err := c.f.Write(p)
+	if n > 0 {
+		c.tx.Add(1)
+	}
+	return n, err
+}
+func WgUpstreamStats() string {
+	wgUpstreamMu.RLock()
+	defer wgUpstreamMu.RUnlock()
+	if wgUpstream == nil {
+		return "upstream: stopped"
+	}
+	return fmt.Sprintf("upstream tx=%d rx=%d", wgUpstream.counts.tx.Load(), wgUpstream.counts.rx.Load())
 }
 
 func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) error {
@@ -53,7 +85,8 @@ func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) erro
 	if f == nil {
 		return fmt.Errorf("wg fd open failed: %d", fd)
 	}
-	ep, err := iobased.New(&tunCounter{f: f}, uint32(mtu), 0)
+	counts := &wgPacketCounter{f: f}
+	ep, err := iobased.New(counts, uint32(mtu), 0)
 	if err != nil {
 		f.Close()
 		return fmt.Errorf("wg iobased: %w", err)
@@ -101,7 +134,7 @@ func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) erro
 		{Destination: header.IPv4EmptySubnet, NIC: 1},
 		{Destination: header.IPv6EmptySubnet, NIC: 1},
 	})
-	wgUpstream = &wgUpstreamStack{st: st, local: localIP, dns: dnsServer, f: f}
+	wgUpstream = &wgUpstreamStack{st: st, local: localIP, dns: dnsServer, f: f, counts: counts}
 	flowLog("WG_UPSTREAM_START local=" + localIP)
 	flowLog("UNIFIED_WG_UPSTREAM_READY local=" + localIP)
 	return nil
@@ -152,6 +185,17 @@ func wgSplitAddr(addr string) (string, uint16, error) {
 }
 
 func wgDialTCP(addr string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	c, err := wgDialTCPContext(ctx, addr)
+	if err != nil {
+		flowLog(fmt.Sprintf("WG_TCP_FAIL dst=%s elapsed_ms=%d err=%v", addr, time.Since(started).Milliseconds(), err))
+	}
+	return c, err
+}
+
+func wgDialTCPContext(ctx context.Context, addr string) (net.Conn, error) {
 	st := wgStackRef()
 	if st == nil {
 		return nil, fmt.Errorf("wg upstream not active")
@@ -170,7 +214,7 @@ func wgDialTCP(addr string) (net.Conn, error) {
 		protocol = ipv4.ProtocolNumber
 	}
 	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(ip), Port: port}
-	return gonet.DialTCP(st, fa, protocol)
+	return gonet.DialContextTCP(ctx, st, fa, protocol)
 }
 
 func wgDialUDP(addr string) (net.Conn, error) {

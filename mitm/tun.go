@@ -1755,13 +1755,17 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	if strings.Count(id.LocalAddress.String(), ":") > 1 {
 		ufam = "v6"
 	}
-	flowLog(fmt.Sprintf("udp dst=%s:%d fam=%s", id.LocalAddress.String(), id.LocalPort, ufam))
+	if id.LocalPort != 443 {
+		flowLog(fmt.Sprintf("udp dst=%s:%d fam=%s", id.LocalAddress.String(), id.LocalPort, ufam))
+	}
 
 	// UDP/443 (QUIC/HTTP3) — ВРЕМЕННЫЙ ТЕСТ 0.5.75 (GPT): НЕ дропаем,
 	// пропускаем обычным protected UDP relay, как остальной UDP.
 	if id.LocalPort == 443 {
-		atomic.AddInt64(&quicDrops, 1)
-		flowLog("QUIC_DROP dst=" + id.LocalAddress.String())
+		n := atomic.AddInt64(&quicDrops, 1)
+		if n == 1 || n%64 == 0 {
+			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s", n, id.LocalAddress.String()))
+		}
 		return
 	}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)

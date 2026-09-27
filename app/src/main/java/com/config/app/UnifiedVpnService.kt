@@ -301,6 +301,8 @@ class UnifiedVpnService : AndroidVpnService() {
         active = false
         AdBlockLog.add("DATAPATH_STOP reason=$reason")
         runCatching {
+            AdBlockLog.add("LAST_VPN " + mitm.Mitm.packetVPNStats())
+            AdBlockLog.add("LAST_UPSTREAM " + mitm.Mitm.wgUpstreamStats())
             AdBlockLog.add("LAST_TUN " + mitm.Mitm.tunStats())
             AdBlockLog.add("LAST_MITM " + mitm.Mitm.mitmStats())
             AdBlockLog.add("LAST_FLOW " + mitm.Mitm.flowLog())

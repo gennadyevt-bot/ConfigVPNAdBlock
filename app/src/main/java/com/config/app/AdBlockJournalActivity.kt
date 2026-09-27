@@ -54,6 +54,8 @@ class AdBlockJournalActivity : AppCompatActivity() {
             sb.append("ourCA_fp=").append(timed { sha256Hex(File(filesDir, "ca.crt").readBytes()) }).append("\n")
             sb.append("caTrustScan=").append(timed { trustScan() }).append("\n")
             sb.append("\n=== NATIVE STATUS ===\n")
+            sb.append("packetVPNStats=").append(timed { mitm.Mitm.packetVPNStats() }).append("\n")
+            sb.append("wgUpstreamStats=").append(timed { mitm.Mitm.wgUpstreamStats() }).append("\n")
             sb.append("stackStats=").append(timed { mitm.Mitm.stackStats() }).append("\n")
             sb.append("tunStats=").append(timed { mitm.Mitm.tunStats() }).append("\n")
             sb.append("mitmStats=").append(timed { mitm.Mitm.mitmStats() }).append("\n")
