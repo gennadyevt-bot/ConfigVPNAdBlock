@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"configadblock/mitm/internal/packetvpn"
+	"configadblock/mitm/internal/transportdiag"
 	"fmt"
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"strconv"
@@ -11,6 +12,16 @@ import (
 
 var packetVPNMu sync.Mutex
 var packetVPN *device.Device
+var packetTrace *transportdiag.Trace
+
+func packetTraceRef() *transportdiag.Trace {
+	packetVPNMu.Lock()
+	defer packetVPNMu.Unlock()
+	if packetTrace != nil {
+		return packetTrace
+	}
+	return transportdiag.New()
+}
 
 // StartPacketVPN owns fd and connects a packet socket to the WG/AWG engine.
 func StartPacketVPN(fd, mtu int64, settings string) error {
@@ -21,7 +32,8 @@ func StartPacketVPN(fd, mtu int64, settings string) error {
 		packetVPN = nil
 	}
 	flowLog("PACKETVPN_START mtu=" + fmt.Sprint(mtu))
-	d, err := packetvpn.Start(int(fd), int(mtu), settings, func(fd int) bool {
+	packetTrace = transportdiag.New()
+	d, err := packetvpn.StartTraced(int(fd), int(mtu), settings, func(fd int) bool {
 		protectorMu.RLock()
 		p := protector
 		protectorMu.RUnlock()
@@ -32,7 +44,7 @@ func StartPacketVPN(fd, mtu int64, settings string) error {
 		if strings.Contains(strings.ToLower(msg), "read") {
 			flowLog("PACKETVPN_READ_ERR " + msg)
 		}
-	})
+	}, packetTrace)
 	if err != nil {
 		flowLog("PACKETVPN_ERR " + err.Error())
 		return err
@@ -51,6 +63,7 @@ func StopPacketVPN() {
 		packetVPN.Close()
 		packetVPN = nil
 	}
+	packetTrace = nil
 }
 
 // Only export an allowlist of numeric health fields: IpcGet also contains keys.

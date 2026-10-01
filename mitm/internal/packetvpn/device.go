@@ -2,10 +2,11 @@
 package packetvpn
 
 import (
+	"configadblock/mitm/internal/transportdiag"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
-	"golang.org/x/sys/unix"
 	"sync"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
@@ -18,6 +19,7 @@ type packetTun struct {
 	mtu    int
 	events chan tun.Event
 	once   sync.Once
+	trace  *transportdiag.Trace
 }
 
 func newPacketTun(fd, mtu int) (*packetTun, error) {
@@ -41,13 +43,22 @@ func (t *packetTun) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if t.trace != nil {
+		t.trace.Packet("PACKET_TO_WG", bufs[0][offset:offset+n], false)
+	}
 	sizes[0] = n
 	return 1, nil
 }
 func (t *packetTun) Write(bufs [][]byte, offset int) (int, error) {
 	for i, b := range bufs {
+		if t.trace != nil {
+			t.trace.Packet("PACKET_FROM_WG", b[offset:], true)
+		}
 		n, err := t.file.Write(b[offset:])
 		if err != nil {
+			if t.trace != nil {
+				t.trace.PacketRxDropped.Add(int64(len(bufs) - i))
+			}
 			return i, err
 		}
 		if n != len(b)-offset {
@@ -68,6 +79,7 @@ type protectedBind struct {
 	conn.Bind
 	protect  func(int) bool
 	logError func(string, ...any)
+	trace    *transportdiag.Trace
 }
 
 // wgSocketBuf — буферы UDP-сокета WG (4 MiB на направление). Дефолтных
@@ -113,7 +125,35 @@ func (b *protectedBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 		b.Bind.Close()
 		return nil, 0, fmt.Errorf("VPN bind opened no sockets")
 	}
+	if b.trace != nil {
+		for i, fn := range fns {
+			fns[i] = func(p [][]byte, s []int, e []conn.Endpoint) (int, error) {
+				n, err := fn(p, s, e)
+				for j := 0; j < n; j++ {
+					if s[j] > 0 {
+						b.trace.OuterRX.Add(1)
+					}
+				}
+				if err != nil {
+					b.trace.OuterRXErrors.Add(1)
+				}
+				return n, err
+			}
+		}
+	}
 	return fns, actual, nil
+}
+
+func (b *protectedBind) Send(p [][]byte, ep conn.Endpoint) error {
+	err := b.Bind.Send(p, ep)
+	if b.trace != nil {
+		if err == nil {
+			b.trace.OuterTX.Add(uint64(len(p)))
+		} else {
+			b.trace.OuterTXErrors.Add(1)
+		}
+	}
+	return err
 }
 
 // The Android upstream accessor dereferences a nil UDPConn when an address
@@ -132,11 +172,16 @@ func socketFD(get func() (int, error)) (fd int, err error) {
 // Start takes ownership of fd, including on failure. settings is the userspace
 // API format for WG or AWG. No kernel TUN ioctls are issued on the packet socket.
 func Start(fd, mtu int, settings string, protect func(int) bool, logError func(string, ...any)) (*device.Device, error) {
+	return StartTraced(fd, mtu, settings, protect, logError, nil)
+}
+
+func StartTraced(fd, mtu int, settings string, protect func(int) bool, logError func(string, ...any), trace *transportdiag.Trace) (*device.Device, error) {
 	t, err := newPacketTun(fd, mtu)
 	if err != nil {
 		return nil, fmt.Errorf("packet socket: %w", err)
 	}
-	bind := &protectedBind{Bind: conn.NewStdNetBind(), protect: protect, logError: logError}
+	t.trace = trace
+	bind := &protectedBind{Bind: conn.NewStdNetBind(), protect: protect, logError: logError, trace: trace}
 	d := device.NewDevice(t, bind, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: logError}, false, func(device.StatusCode) {})
 	if err = d.IpcSet(settings); err != nil {
 		d.Close()

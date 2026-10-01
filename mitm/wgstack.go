@@ -16,7 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
+	"configadblock/mitm/internal/transportdiag"
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -38,36 +39,23 @@ type wgUpstreamStack struct {
 	dns    string
 	f      *os.File
 	counts *wgPacketCounter
+	link   *wgLink
+	trace  *transportdiag.Trace
 }
 
 // Separate decrypted upstream packets from application TUN counters.
 type wgPacketCounter struct {
-	f  *os.File
 	rx atomic.Int64
 	tx atomic.Int64
 }
 
-func (c *wgPacketCounter) Read(p []byte) (int, error) {
-	n, err := c.f.Read(p)
-	if n > 0 {
-		c.rx.Add(1)
-	}
-	return n, err
-}
-func (c *wgPacketCounter) Write(p []byte) (int, error) {
-	n, err := c.f.Write(p)
-	if n > 0 {
-		c.tx.Add(1)
-	}
-	return n, err
-}
 func WgUpstreamStats() string {
 	wgUpstreamMu.RLock()
 	defer wgUpstreamMu.RUnlock()
 	if wgUpstream == nil {
 		return "upstream: stopped"
 	}
-	return fmt.Sprintf("upstream tx=%d rx=%d", wgUpstream.counts.tx.Load(), wgUpstream.counts.rx.Load())
+	return fmt.Sprintf("upstream tx=%d rx=%d %s registeredEndpoints=%d cleanupEndpoints=%d tcpChecksumErrors=%d tcpInvalidSegments=%d\nWG_DIAL_FAIL %s", wgUpstream.counts.tx.Load(), wgUpstream.counts.rx.Load(), wgUpstream.trace.Stats()+" "+wgUpstream.trace.IOStatus(), len(wgUpstream.st.RegisteredEndpoints()), len(wgUpstream.st.CleanupEndpoints()), wgUpstream.st.Stats().TCP.ChecksumErrors.Value(), wgUpstream.st.Stats().TCP.InvalidSegmentsReceived.Value(), wgUpstream.trace.Failures())
 }
 
 func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) error {
@@ -78,23 +66,42 @@ func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) erro
 		flowLog("WG_UPSTREAM_ERR invalid_fd")
 		return fmt.Errorf("wg fd invalid: %d", fd)
 	}
-	// НЕ вызываем unix.SetNonblock: dup(fd) разделяет open file description
-	// с packetvpn/WG engine — nonblocking там убивает wireguard-go (EAGAIN fatal).
-	// gVisor upstream работает на blocking fd.
+	// This is the opposite end of the socketpair from packetvpn, not a dup
+	// of the engine endpoint. Go's poller needs O_NONBLOCK to interrupt reads
+	// and writes on Close. Java's duplicate of this same end is never read.
+	if fd < 0 || mtu <= 0 || mtu > 65535 {
+		if fd >= 0 {
+			unix.Close(int(fd))
+		}
+		return fmt.Errorf("invalid upstream fd/MTU")
+	}
+	if err := unix.SetNonblock(int(fd), true); err != nil {
+		unix.Close(int(fd))
+		return err
+	}
 	f := os.NewFile(uintptr(fd), "wg-tun")
 	if f == nil {
 		return fmt.Errorf("wg fd open failed: %d", fd)
 	}
-	counts := &wgPacketCounter{f: f}
-	ep, err := iobased.New(counts, uint32(mtu), 0)
-	if err != nil {
-		f.Close()
-		return fmt.Errorf("wg iobased: %w", err)
-	}
+	counts := &wgPacketCounter{}
+	trace := packetTraceRef()
+	ep := newWgLink(f, uint32(mtu), counts, trace)
+	success := false
+	defer func() {
+		if !success {
+			ep.Close()
+			ep.Wait()
+		}
+	}()
 	st := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
+	defer func() {
+		if !success {
+			st.Close()
+		}
+	}()
 	if terr := st.CreateNICWithOptions(1, ep, stack.NICOptions{Disabled: false, QDisc: nil}); terr != nil {
 		f.Close()
 		return fmt.Errorf("wg nic: %s", terr)
@@ -134,7 +141,8 @@ func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) erro
 		{Destination: header.IPv4EmptySubnet, NIC: 1},
 		{Destination: header.IPv6EmptySubnet, NIC: 1},
 	})
-	wgUpstream = &wgUpstreamStack{st: st, local: localIP, dns: dnsServer, f: f, counts: counts}
+	wgUpstream = &wgUpstreamStack{st: st, local: localIP, dns: dnsServer, f: f, counts: counts, link: ep, trace: trace}
+	success = true
 	startQuicAdResolver()
 	flowLog("WG_UPSTREAM_START local=" + localIP)
 	flowLog("UNIFIED_WG_UPSTREAM_READY local=" + localIP)
@@ -144,7 +152,9 @@ func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) erro
 func stopWgUpstreamLocked() {
 	if wgUpstream != nil {
 		flowLog("WG_UPSTREAM_STOP local=" + wgUpstream.local)
+		wgUpstream.link.Close()
 		wgUpstream.st.Close()
+		wgUpstream.link.Wait()
 		if wgUpstream.f != nil {
 			wgUpstream.f.Close()
 		}
@@ -213,8 +223,10 @@ func wgDialTCPTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 }
 
 func wgDialTCPContext(ctx context.Context, addr string) (net.Conn, error) {
-	st := wgStackRef()
-	if st == nil {
+	wgUpstreamMu.RLock()
+	u := wgUpstream
+	wgUpstreamMu.RUnlock()
+	if u == nil {
 		return nil, fmt.Errorf("wg upstream not active")
 	}
 	host, port, err := wgSplitAddr(addr)
@@ -233,7 +245,7 @@ func wgDialTCPContext(ctx context.Context, addr string) (net.Conn, error) {
 	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(ip), Port: port}
 	// НЕ возвращаем (typed-nil, err): net.Conn-интерфейс с nil-*TCPConn
 	// внутри ломает вызывающих (c != nil true -> panic в Close).
-	conn, derr := gonet.DialContextTCP(ctx, st, fa, protocol)
+	conn, derr := dialTrackedTCP(ctx, u, fa, protocol)
 	if derr != nil {
 		return nil, derr
 	}

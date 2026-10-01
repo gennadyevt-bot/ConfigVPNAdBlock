@@ -71,6 +71,10 @@ func TestPacketTunnelEncryptedRoundTrip(t *testing.T) {
 			}
 			d1, f1, p1 := start(k1)
 			d2, f2, p2 := start(k2)
+			d1.Down()
+			d2.Down()
+			d1.IpcSet(fmt.Sprintf("listen_port=%d\n", p1))
+			d2.IpcSet(fmt.Sprintf("listen_port=%d\n", p2))
 			for _, peer := range []struct {
 				d    *device.Device
 				key  *ecdh.PrivateKey
@@ -79,6 +83,12 @@ func TestPacketTunnelEncryptedRoundTrip(t *testing.T) {
 				if err := peer.d.IpcSet(fmt.Sprintf("public_key=%x\nendpoint=127.0.0.1:%d\nallowed_ip=0.0.0.0/0\n", peer.key.PublicKey().Bytes(), peer.port)); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if err := d1.Up(); err != nil {
+				t.Fatal(err)
+			}
+			if err := d2.Up(); err != nil {
+				t.Fatal(err)
 			}
 			for i, pair := range [][2]*os.File{{f1, f2}, {f2, f1}} {
 				payload := []byte("filtered-packet-through-vpn")
@@ -187,6 +197,10 @@ func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 	}
 	d1, f1, p1 := startDev(k1)
 	d2, f2, p2 := startDev(k2)
+	d1.Down()
+	d2.Down()
+	d1.IpcSet(fmt.Sprintf("listen_port=%d\n", p1))
+	d2.IpcSet(fmt.Sprintf("listen_port=%d\n", p2))
 	for _, peer := range []struct {
 		d    *device.Device
 		key  *ecdh.PrivateKey
@@ -195,6 +209,12 @@ func TestPacketTunIdleKeepsDeviceAlive(t *testing.T) {
 		if err := peer.d.IpcSet(fmt.Sprintf("public_key=%x\nendpoint=127.0.0.1:%d\nallowed_ip=0.0.0.0/0\n", peer.key.PublicKey().Bytes(), peer.port)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := d1.Up(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d2.Up(); err != nil {
+		t.Fatal(err)
 	}
 	// 1) IDLE: без пакетов 500 мс устройства НЕ должны самозакрыться
 	time.Sleep(500 * time.Millisecond)
