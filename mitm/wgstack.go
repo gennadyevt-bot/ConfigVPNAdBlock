@@ -306,32 +306,43 @@ func wgResolve(host string) (net.IP, error) {
 	if ip, ok := wgResolveCached(host); ok {
 		return ip, nil
 	}
-	st := wgStackRef()
-	if st == nil {
-		return nil, fmt.Errorf("wg upstream not active")
+	// DNS через WG-стек бывает потерянным: до 2 попыток со свежим
+	// ephemeral-портом, deadline 1.5s на попытку. Раньше: 1 попытка/2.5s
+	// -> серии WG_UPSTREAM_DNS_ERR и каскадные 10s dial-зависания.
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		st := wgStackRef()
+		if st == nil {
+			return nil, fmt.Errorf("wg upstream not active")
+		}
+		fa := tcpip.FullAddress{NIC: 1, Addr: wgDNSServer(), Port: 53}
+		c, err := gonet.DialUDP(st, nil, &fa, ipv4.ProtocolNumber)
+		if err != nil {
+			return nil, fmt.Errorf("wg dns dial: %w", err)
+		}
+		_ = c.SetDeadline(time.Now().Add(1500 * time.Millisecond))
+		_, werr := c.Write(buildDNSQueryA(host))
+		if werr != nil {
+			c.Close()
+			lastErr = werr
+			continue
+		}
+		buf := make([]byte, 512)
+		n, rerr := c.Read(buf)
+		c.Close()
+		if rerr != nil {
+			lastErr = rerr
+			continue
+		}
+		ip, err := parseDNSA(buf[:n])
+		if err != nil {
+			return nil, err
+		}
+		wgResolveCachePut(host, ip)
+		return ip, nil
 	}
-	fa := tcpip.FullAddress{NIC: 1, Addr: wgDNSServer(), Port: 53}
-	c, err := gonet.DialUDP(st, nil, &fa, ipv4.ProtocolNumber)
-	if err != nil {
-		return nil, fmt.Errorf("wg dns dial: %w", err)
-	}
-	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(2000 * time.Millisecond))
-	if _, err := c.Write(buildDNSQueryA(host)); err != nil {
-		return nil, err
-	}
-	buf := make([]byte, 512)
-	n, err := c.Read(buf)
-	if err != nil {
-		flowLog("WG_UPSTREAM_DNS_ERR host=" + host + " err=" + err.Error())
-		return nil, err
-	}
-	ip, err := parseDNSA(buf[:n])
-	if err != nil {
-		return nil, err
-	}
-	wgResolveCachePut(host, ip)
-	return ip, nil
+	flowLog("WG_UPSTREAM_DNS_ERR host=" + host + " err=" + lastErr.Error())
+	return nil, lastErr
 }
 
 func buildDNSQueryA(host string) []byte {
