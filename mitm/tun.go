@@ -401,6 +401,7 @@ var (
 	t443seen   int64
 	quicRelays int64
 	quicDrops  int64
+	quicPass   int64
 	udpSeen    int64
 	tcp4N      int64
 	tcp6N      int64
@@ -414,6 +415,7 @@ var (
 // браузера логируется построчно, UDP/443 роняем для отката на TCP).
 func UdpSeen() int64   { return atomic.LoadInt64(&udpSeen) }
 func QuicDrops() int64 { return atomic.LoadInt64(&quicDrops) }
+func QuicPass() int64 { return atomic.LoadInt64(&quicPass) }
 
 func T443Seen() int64   { return atomic.LoadInt64(&t443seen) }
 func QuicRelays() int64 { return atomic.LoadInt64(&quicRelays) }
@@ -1609,6 +1611,94 @@ func dnsCacheGet(key string) ([]byte, bool) {
 	return v, ok
 }
 
+// dnsIPMap — обратная карта IP -> hostname из ответов нашего DNS-резолвера.
+// Нужна селективному QUIC-пропуску: решение "рубить/не рубить UDP/443"
+// принимается по хосту, а пакет приходит на IP.
+var dnsIPMap sync.Map
+
+func dnsIPMapGet(ip string) (string, bool) {
+	v, ok := dnsIPMap.Load(ip)
+	if !ok {
+		return "", false
+	}
+	s, _ := v.(string)
+	return s, s != ""
+}
+
+// recordDNSAnswers заполняет обратную карту из ответа DNS (A/AAAA -> qname).
+func recordDNSAnswers(query, ans []byte) {
+	name := dnsQname(query)
+	if name == "" || len(ans) < 12 {
+		return
+	}
+	qd := int(ans[4])<<8 | int(ans[5])
+	an := int(ans[6])<<8 | int(ans[7])
+	off := 12
+	for i := 0; i < qd && off < len(ans); i++ {
+		off = skipDNSName(ans, off)
+		off += 4 // qtype + qclass
+	}
+	for i := 0; i < an && off+10 <= len(ans); i++ {
+		off = skipDNSName(ans, off)
+		if off+10 > len(ans) {
+			return
+		}
+		typ := int(ans[off])<<8 | int(ans[off+1])
+		rdlen := int(ans[off+8])<<8 | int(ans[off+9])
+		off += 10
+		if off+rdlen > len(ans) {
+			return
+		}
+		if (typ == 1 && rdlen == 4) || (typ == 28 && rdlen == 16) {
+			dnsIPMap.Store(net.IP(ans[off:off+rdlen]).String(), name)
+		}
+		off += rdlen
+	}
+}
+
+// dnsQname извлекает имя из вопроса DNS-сообщения (без компрессии).
+func dnsQname(msg []byte) string {
+	if len(msg) < 13 {
+		return ""
+	}
+	var b strings.Builder
+	off := 12
+	for off < len(msg) {
+		l := int(msg[off])
+		if l == 0 {
+			break
+		}
+		if l&0xC0 != 0 {
+			return ""
+		}
+		off++
+		if off+l > len(msg) {
+			return ""
+		}
+		if b.Len() > 0 {
+			b.WriteByte('.')
+		}
+		b.Write(msg[off : off+l])
+		off += l
+	}
+	return strings.ToLower(b.String())
+}
+
+// skipDNSName пропускает имя (с учётом компрессионных указателей).
+func skipDNSName(msg []byte, off int) int {
+	for off < len(msg) {
+		l := int(msg[off])
+		if l == 0 {
+			return off + 1
+		}
+		if l&0xC0 == 0xC0 {
+			return off + 2
+		}
+		off += 1 + l
+	}
+	return off
+}
+
 func dnsCachePut(key string, v []byte) {
 	dnsCacheMu.Lock()
 	defer dnsCacheMu.Unlock()
@@ -1764,6 +1854,7 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 			}
 			return
 		}
+		recordDNSAnswers(buf[:n], ans)
 		dnsCachePut(key, ans)
 		atomic.AddInt64(&udpCount, 1)
 		_, _ = conn.Write(ans)
@@ -1791,11 +1882,29 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// Возврат к рабочей базе (working-baseline-20261001): дроп QUIC ->
 	// форсинг TCP -> SNI-блок/MITM. Скорость Google - компромисс архитектуры.
 	if id.LocalPort == 443 {
-		n := atomic.AddInt64(&quicDrops, 1)
-		if n == 1 || n%64 == 0 {
-			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s", n, id.LocalAddress.String()))
+		// Селективный QUIC (alpha46). Дроп UDP/443 имеет смысл только для
+		// хостов, которых мы реально фильтруем (форсинг TCP -> SNI-блок/MITM).
+		// Pinned-хосты (Google/YouTube/VK/банки) MITM не пропускают, поэтому
+		// дроп их QUIC — чистый вред: скорость ломается, фильтрации ноль.
+		// DoH-хосты пропускаем по той же причине: DNS-over-QUIC мы не
+		// фильтруем, а дроп даёт DNS-таймауты (то заходит, то нет).
+		// Решение по IP -> hostname через обратную карту DNS-ответов.
+		// Хост неизвестен (не в нашей DNS-карте) -> безопасный дефолт: дроп.
+		host, known := dnsIPMapGet(id.LocalAddress.String())
+		pass := known && (isPinnedHost(host) || isDoHHost(host)) && !isBlocked(host)
+		if pass {
+			n := atomic.AddInt64(&quicPass, 1)
+			if n == 1 || n%16 == 0 {
+				flowLog(fmt.Sprintf("QUIC_PASS total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
+			}
+			// проваливаемся в общий UDP-duplex relay ниже
+		} else {
+			n := atomic.AddInt64(&quicDrops, 1)
+			if n == 1 || n%64 == 0 {
+				flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
+			}
+			return
 		}
-		return
 	}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
 	if id.LocalAddress.String() == dzenFakeIP {

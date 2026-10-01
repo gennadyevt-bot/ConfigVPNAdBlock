@@ -186,7 +186,15 @@ func wgSplitAddr(addr string) (string, uint16, error) {
 }
 
 func wgDialTCP(addr string) (net.Conn, error) {
-	return wgDialTCPTimeout(addr, 5*time.Second)
+	// alpha46: короткая первая попытка + один retry. TCP-handshake через
+	// двойной userspace-стек нестабилен: 5-секундные зависания на connect
+	// к Яндексу/Дзену, второй заход почти всегда проходит. Худший случай
+	// тот же (5 c), типичный — восстановление за 2.5 c вместо отказа.
+	c, err := wgDialTCPTimeout(addr, 2500*time.Millisecond)
+	if err == nil {
+		return c, nil
+	}
+	return wgDialTCPTimeout(addr, 2500*time.Millisecond)
 }
 
 // wgDialTCPTimeout — параметризованный дедлайн. Для DoH/DoT используем
