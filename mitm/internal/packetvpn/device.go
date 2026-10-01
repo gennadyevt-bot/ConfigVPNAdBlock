@@ -66,8 +66,15 @@ func (t *packetTun) Close() error {
 // This also covers sockets reopened by the engine after a network change.
 type protectedBind struct {
 	conn.Bind
-	protect func(int) bool
+	protect  func(int) bool
+	logError func(string, ...any)
 }
+
+// wgSocketBuf — буферы UDP-сокета WG (4 MiB на направление). Дефолтных
+// ~212KB не хватает при всплесках: страница открывает десятки соединений
+// разом -> переполнение -> дроп пакетов, включая SYN -> флап handshake
+// ("то заходит, то нет"). Ядро при необходимости ужимает до rmem_max.
+const wgSocketBuf = 4 << 20
 
 func (b *protectedBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	fns, actual, err := b.Bind.Open(port)
@@ -89,7 +96,18 @@ func (b *protectedBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 			b.Bind.Close()
 			return nil, 0, fmt.Errorf("VPN socket protection rejected")
 		}
+		// alpha49: увеличиваем буферы UDP-сокета WG против дропа SYN
+		// при всплесках одновременных соединений.
+		if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, wgSocketBuf); err != nil && b.logError != nil {
+			b.logError("WG SO_RCVBUF: %v", err)
+		}
+		if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, wgSocketBuf); err != nil && b.logError != nil {
+			b.logError("WG SO_SNDBUF: %v", err)
+		}
 		count++
+	}
+	if b.logError != nil {
+		b.logError("WG socket buffers requested on %d socket(s)", count)
 	}
 	if count == 0 {
 		b.Bind.Close()
@@ -118,7 +136,7 @@ func Start(fd, mtu int, settings string, protect func(int) bool, logError func(s
 	if err != nil {
 		return nil, fmt.Errorf("packet socket: %w", err)
 	}
-	bind := &protectedBind{Bind: conn.NewStdNetBind(), protect: protect}
+	bind := &protectedBind{Bind: conn.NewStdNetBind(), protect: protect, logError: logError}
 	d := device.NewDevice(t, bind, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: logError}, false, func(device.StatusCode) {})
 	if err = d.IpcSet(settings); err != nil {
 		d.Close()
