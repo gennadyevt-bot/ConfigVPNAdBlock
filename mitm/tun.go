@@ -97,7 +97,7 @@ func dialTCP(addr string) (net.Conn, error) {
 	if wgUpstreamActive() {
 		return wgDialTCP(addr)
 	}
-	d := net.Dialer{Timeout: 10 * time.Second, Control: protectedControl()}
+	d := net.Dialer{Timeout: 5 * time.Second, Control: protectedControl()}
 	return d.Dial("tcp", addr)
 }
 
@@ -105,7 +105,7 @@ func dialTCP(addr string) (net.Conn, error) {
 // VPN), а Java-колбэк protect() был кандидатом на вечный стопор
 // 443-потоков после →gp-enter.
 func dialLocal(addr string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 10 * time.Second}
+	d := net.Dialer{Timeout: 5 * time.Second}
 	return d.Dial("tcp", addr)
 }
 
