@@ -243,7 +243,11 @@ func wgDialUDP(addr string) (net.Conn, error) {
 		protocol = ipv4.ProtocolNumber
 	}
 	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(ip), Port: port}
-	return gonet.DialUDP(st, nil, &fa, protocol)
+	uc, uerr := gonet.DialUDP(st, nil, &fa, protocol)
+	if uerr != nil {
+		return nil, uerr
+	}
+	return uc, nil
 }
 
 // wgDNSServer: DNS из wg-конфига (параметр setWgUpstream), иначе 8.8.8.8.
