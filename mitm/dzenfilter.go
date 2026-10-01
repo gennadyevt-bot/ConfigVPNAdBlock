@@ -1830,19 +1830,9 @@ function d(el){if(!el)return '-';var r=el.getBoundingClientRect();return el.tagN
 if(!s){try{fetch('/__cab_probe?ev=currentScript%3Dnull',{cache:'no-store'}).catch(function(){});}catch(e){}return;}
 try{window.dispatchEvent(new Event('__cab_ad_blocked'));}catch(e){}
 try{var parts=['script='+d(s)];var p=s.parentElement;for(var i=0;i<6&&p;i++){parts.push('p'+i+'='+d(p));p=p.parentElement;}parts.push('prev='+(s.previousElementSibling?d(s.previousElementSibling):'-'));parts.push('next='+(s.nextElementSibling?d(s.nextElementSibling):'-'));fetch('/__cab_probe?ev='+encodeURIComponent(parts.join(' ')),{cache:'no-store'}).catch(function(){});}catch(e){}
-// мгновенное скрытие белого плейсхолдера: ближайший предок ПОДТВЕРЖДЁННОГО
-// рекламного скрипта рекламного размера (max 3 шага, min 120x60).
-// Старт от самого скрипта -> не заденет обычный контент страницы.
-var el=s.parentElement,h=0;
-while(el&&h<3){
- var r=el.getBoundingClientRect();
- if(r.width>=120&&r.height>=60&&r.width<=window.innerWidth&&r.height<=window.innerHeight){
-  el.style.display='none';el.style.visibility='hidden';el.style.height='0';el.style.overflow='hidden';
-  try{fetch('/__cab_probe?ev='+encodeURIComponent('PAYLOAD_HIDE tag='+el.tagName+' w='+Math.round(r.width)+' h='+Math.round(r.height)),{cache:'no-store'}).catch(function(){});}catch(e){}
-  break;
- }
- el=el.parentElement;h++;
-}
+// Скрытие плейсхолдера ОТКЛЮЧЕНО: заблокированный скрипт лежит в HEAD
+// (COSMETIC_PROBE: p0=HEAD p1=HTML) - подъём от него находит только HTML
+// и рискует скрыть страницу, а контейнер баннера не находит вообще.
 })();`
 				blockResp := &http.Response{
 					Status:        "200 OK",
@@ -2129,19 +2119,9 @@ function d(el){if(!el)return '-';var r=el.getBoundingClientRect();return el.tagN
 if(!s){try{fetch('/__cab_probe?ev=currentScript%3Dnull',{cache:'no-store'}).catch(function(){});}catch(e){}return;}
 try{window.dispatchEvent(new Event('__cab_ad_blocked'));}catch(e){}
 try{var parts=['script='+d(s)];var p=s.parentElement;for(var i=0;i<6&&p;i++){parts.push('p'+i+'='+d(p));p=p.parentElement;}parts.push('prev='+(s.previousElementSibling?d(s.previousElementSibling):'-'));parts.push('next='+(s.nextElementSibling?d(s.nextElementSibling):'-'));fetch('/__cab_probe?ev='+encodeURIComponent(parts.join(' ')),{cache:'no-store'}).catch(function(){});}catch(e){}
-// мгновенное скрытие белого плейсхолдера: ближайший предок ПОДТВЕРЖДЁННОГО
-// рекламного скрипта рекламного размера (max 3 шага, min 120x60).
-// Старт от самого скрипта -> не заденет обычный контент страницы.
-var el=s.parentElement,h=0;
-while(el&&h<3){
- var r=el.getBoundingClientRect();
- if(r.width>=120&&r.height>=60&&r.width<=window.innerWidth&&r.height<=window.innerHeight){
-  el.style.display='none';el.style.visibility='hidden';el.style.height='0';el.style.overflow='hidden';
-  try{fetch('/__cab_probe?ev='+encodeURIComponent('PAYLOAD_HIDE tag='+el.tagName+' w='+Math.round(r.width)+' h='+Math.round(r.height)),{cache:'no-store'}).catch(function(){});}catch(e){}
-  break;
- }
- el=el.parentElement;h++;
-}
+// Скрытие плейсхолдера ОТКЛЮЧЕНО: заблокированный скрипт лежит в HEAD
+// (COSMETIC_PROBE: p0=HEAD p1=HTML) - подъём от него находит только HTML
+// и рискует скрыть страницу, а контейнер баннера не находит вообще.
 })();`
 					w.Header().Set("Content-Type", "application/javascript")
 					w.Header().Set("Content-Length", strconv.Itoa(len(jsBlocked)))
