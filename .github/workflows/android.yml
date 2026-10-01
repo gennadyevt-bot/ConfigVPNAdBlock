@@ -34,3 +34,29 @@ jobs:
         with:
           name: cvab-release-apk
           path: app/build/outputs/apk/release/*.apk
+
+  # Публикация APK в Releases: артефакты CI требуют логина GitHub,
+  # релизы качаются без него. Перезаписывает pre-release с тем же тегом.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cvab-release-apk
+          path: apk
+      - name: Publish pre-release APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          cd apk
+          APK=$(ls *.apk | head -1)
+          mv "$APK" "ConfigVPNAdBlock-$VER.apk"
+          gh release delete "$VER" --cleanup-tag --yes 2>/dev/null || true
+          gh release create "$VER" "ConfigVPNAdBlock-$VER.apk" \
+            --title "$VER" --target "${{ github.sha }}" --prerelease \
+            --notes "CI build $VER из integration-unified-adblock (${{ github.sha }})"
