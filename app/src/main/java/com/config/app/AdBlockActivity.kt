@@ -27,7 +27,22 @@ class AdBlockActivity : AppCompatActivity() {
         updateStatus()
         sw.setOnCheckedChangeListener { _, on ->
             prefs.edit().putBoolean("adblock_enabled", on).apply()
-            Toast.makeText(this, "Переподключите VPN для применения", Toast.LENGTH_LONG).show()
+            // переключатель вступает в силу СРАЗУ: если VPN подключён — сами
+            // переподключаем (иначе движок остаётся в тракте до ручного
+            // переподключения и "выключенный" AdBlock продолжает фильтровать)
+            thread {
+                runCatching {
+                    val vm = VpnManager.getInstance(this@AdBlockActivity)
+                    if (vm.getStatus() == VpnStatus.CONNECTED) {
+                        val srv = vm.getCurrentServer()
+                        if (srv != null) {
+                            vm.disconnect()
+                            Thread.sleep(1000)
+                            vm.connect(srv)
+                        }
+                    }
+                }
+            }
             updateStatus()
         }
         findViewById<android.view.View>(R.id.btnInstallCert).setOnClickListener { installCert() }
