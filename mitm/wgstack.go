@@ -214,7 +214,13 @@ func wgDialTCPContext(ctx context.Context, addr string) (net.Conn, error) {
 		protocol = ipv4.ProtocolNumber
 	}
 	fa := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(ip), Port: port}
-	return gonet.DialContextTCP(ctx, st, fa, protocol)
+	// НЕ возвращаем (typed-nil, err): net.Conn-интерфейс с nil-*TCPConn
+	// внутри ломает вызывающих (c != nil true -> panic в Close).
+	conn, derr := gonet.DialContextTCP(ctx, st, fa, protocol)
+	if derr != nil {
+		return nil, derr
+	}
+	return conn, nil
 }
 
 func wgDialUDP(addr string) (net.Conn, error) {
