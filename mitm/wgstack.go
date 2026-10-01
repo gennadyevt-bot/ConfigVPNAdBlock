@@ -135,6 +135,7 @@ func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) erro
 		{Destination: header.IPv6EmptySubnet, NIC: 1},
 	})
 	wgUpstream = &wgUpstreamStack{st: st, local: localIP, dns: dnsServer, f: f, counts: counts}
+	startQuicAdResolver()
 	flowLog("WG_UPSTREAM_START local=" + localIP)
 	flowLog("UNIFIED_WG_UPSTREAM_READY local=" + localIP)
 	return nil

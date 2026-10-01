@@ -1764,9 +1764,15 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// Google/YouTube, а фильтрации не добавлял: их пиннинг всё равно не даёт
 	// MITM, SNI-блокировка и DNS-фильтр продолжают работать.
 	if id.LocalPort == 443 {
-		n := atomic.AddInt64(&quicDrops, 1)
+		ip := id.LocalAddress.String()
+		if isQuicAdIP(ip) {
+			atomic.AddInt64(&quicDrops, 1)
+			flowLog("QUIC_AD_DROP dst=" + ip)
+			return
+		}
+		n := atomic.AddInt64(&quicRelays, 1)
 		if n == 1 || n%64 == 0 {
-			flowLog(fmt.Sprintf("QUIC_RELAY total=%d dst=%s", n, id.LocalAddress.String()))
+			flowLog(fmt.Sprintf("QUIC_RELAY total=%d dst=%s", n, ip))
 		}
 	}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
