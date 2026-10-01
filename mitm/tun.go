@@ -1882,36 +1882,19 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// Возврат к рабочей базе (working-baseline-20261001): дроп QUIC ->
 	// форсинг TCP -> SNI-блок/MITM. Скорость Google - компромисс архитектуры.
 	if id.LocalPort == 443 {
-		// Селективный QUIC (alpha46). Дроп UDP/443 имеет смысл только для
-		// хостов, которых мы реально фильтруем (форсинг TCP -> SNI-блок/MITM).
-		// Pinned-хосты (Google/YouTube/VK/банки) MITM не пропускают, поэтому
-		// дроп их QUIC — чистый вред: скорость ломается, фильтрации ноль.
-		// DoH-хосты пропускаем по той же причине: DNS-over-QUIC мы не
-		// фильтруем, а дроп даёт DNS-таймауты (то заходит, то нет).
-		// Решение по IP -> hostname через обратную карту DNS-ответов.
-		// alpha47: неизвестный хост -> ПРОПУСК, а не дроп. Chrome держит
-		// свой DNS-кэш: IP часто приходит не из нашего резолвера, и дроп
-		// такого QUIC = чёрная дыра безо всякой выгоды для фильтрации
-		// (мы даже не знаем, кто это). Плюс смесь pass/drop роняет
-		// QUIC-fallback Chrome: раз часть QUIC работает, браузер ждёт
-		// обрезанный хост бесконечно вместо отката на TCP.
-		// Дроп только для ИЗВЕСТНЫХ хостов, которых реально фильтруем
-		// (не pinned и не DoH) — там форсинг TCP даёт SNI-блок/MITM.
-		host, known := dnsIPMapGet(id.LocalAddress.String())
-		pinnedOrDoh := isPinnedHost(host) || isDoHHost(host)
-		if !known || pinnedOrDoh {
-			n := atomic.AddInt64(&quicPass, 1)
-			if n == 1 || n%16 == 0 {
-				flowLog(fmt.Sprintf("QUIC_PASS total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
-			}
-			// проваливаемся в общий UDP-duplex relay ниже
-		} else {
-			n := atomic.AddInt64(&quicDrops, 1)
-			if n == 1 || n%64 == 0 {
-				flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
-			}
-			return
+		// alpha48: ОТКАТ селективного QUIC (alpha46/47). Пропуск UDP/443
+		// через gVisor->WG UDP-relay дал регрессии (alpha46 — чёрная дыра
+		// для кэшированных IP Chrome; alpha47 — пропуск всех неизвестных
+		// поломал весь трафик). QUIC-relay через двойной userspace-стек
+		// требует отдельной проверки, вслепую на пользователе не делаем.
+		// Возврат к рабочей базе: дроп QUIC -> форсинг TCP -> SNI-блок/MITM.
+		// Скорость Google/YouTube — известный компромисс этой архитектуры.
+		host, _ := dnsIPMapGet(id.LocalAddress.String())
+		n := atomic.AddInt64(&quicDrops, 1)
+		if n == 1 || n%64 == 0 {
+			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
 		}
+		return
 	}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
 	if id.LocalAddress.String() == dzenFakeIP {
