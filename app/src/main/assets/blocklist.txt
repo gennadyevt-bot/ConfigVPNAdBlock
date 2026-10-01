@@ -49757,3 +49757,5 @@ ogkopg.win/cm/dsp
 0.0.0.0 timdovs.com
 0.0.0.0 rt.octoclick.com
 0.0.0.0 yabs.yandex.ru
+0.0.0.0 dr.yandex.net
+0.0.0.0 dr2.yandex.net
