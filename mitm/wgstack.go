@@ -186,7 +186,7 @@ func wgSplitAddr(addr string) (string, uint16, error) {
 }
 
 func wgDialTCP(addr string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	started := time.Now()
 	c, err := wgDialTCPContext(ctx, addr)
