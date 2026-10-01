@@ -148,6 +148,9 @@ func loadBlocklist(path string) {
 	blockedPaths = pm
 	blockedMu.Unlock()
 	log.Printf("[MITM] blocklist: %d domains, %d path-rules", len(m), len(pm))
+	// В FLOW-лог: по capture сразу видно, сколько доменов реально
+	// загрузил native-движок (диагностика рассинхрона bypass vs blocklist).
+	flowLog(fmt.Sprintf("BLOCKLIST_LOAD domains=%d paths=%d", len(m), len(pm)))
 }
 
 // checkURL проверяет host+path по блоклисту: сначала host-правила (поход

@@ -101,6 +101,16 @@ func dialTCP(addr string) (net.Conn, error) {
 	return d.Dial("tcp", addr)
 }
 
+// dialTCPShort — короткий дедлайн для DoH/DoT (853): быстрый RST, чтобы
+// клиент откатился на системный DNS через TUN, а не висел на мёртвом upstream.
+func dialTCPShort(addr string, timeout time.Duration) (net.Conn, error) {
+	if wgUpstreamActive() {
+		return wgDialTCPTimeout(addr, timeout)
+	}
+	d := net.Dialer{Timeout: timeout, Control: protectedControl()}
+	return d.Dial("tcp", addr)
+}
+
 // dialLocal — для 127.0.0.1: protect не нужен (loopback не идёт через
 // VPN), а Java-колбэк protect() был кандидатом на вечный стопор
 // 443-потоков после →gp-enter.
@@ -458,7 +468,14 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 			dfam = "v6"
 		}
 		flowLog(fmt.Sprintf("tcp dst=%s fam=%s direct", hp, dfam))
-		up, err := dialTCP(hp)
+		var up net.Conn
+		var err error
+		if port == 853 {
+			// DoT: короткий дедлайн, быстрый RST -> откат на DNS через TUN.
+			up, err = dialTCPShort(hp, 2500*time.Millisecond)
+		} else {
+			up, err = dialTCP(hp)
+		}
 		if err != nil {
 			setErr(fmt.Errorf("direct %s: %w", hp, err))
 			flowLog(hp + "→dirX")
@@ -1170,7 +1187,13 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// dst:443, реплей захваченного ClientHello, raw relay. Никакого
 	// TLS с нашей стороны — клиент не видит ни alert'ов, ни наших cert.
 	goDirect := func(tag string) {
-		up, err := dialTCP(hp)
+		dialFn := dialTCP
+		// DoH-хосты: короткий дедлайн (2.5s) вместо 5s — быстрый RST,
+		// браузер откатится на системный DNS через TUN (с нашей фильтрацией).
+		if peekSNI != "" && isDoHHost(peekSNI) {
+			dialFn = func(a string) (net.Conn, error) { return dialTCPShort(a, 2500*time.Millisecond) }
+		}
+		up, err := dialFn(hp)
 		if err != nil {
 			atomic.AddInt64(&directFailN, 1)
 			flowLog(fmt.Sprintf("#%d %s direct FAIL %v", fid, tag, err))

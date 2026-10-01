@@ -1680,6 +1680,14 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	if v, bypassed := runtimeBypass.Load(sni); bypassed {
 		ts, _ := v.(int64)
 		if age := time.Since(time.Unix(0, ts)); age < runtimeBypassTTL {
+			// bypass НЕ должен перекрывать блоклист: хост мог попасть в
+			// blocklist позже, чем был записан в bypass (ads-m.rustore.ru,
+			// tracker-api.vk-analytics.ru уходили в direct вместо RST).
+			if hit, rule := checkURL(sni, ""); hit {
+				atomic.AddInt64(&genericBlockedN, 1)
+				flowLog("GENERIC_BLOCKED sni=" + sni + " rule=" + rule + " (bypass-overridden)")
+				return true, true
+			}
 			atomic.AddInt64(&genericDirectBypassN, 1)
 			flowLog("GENERIC_DIRECT_BYPASS sni=" + sni + " reason=runtime-bypass age=" + age.String())
 			return false, false

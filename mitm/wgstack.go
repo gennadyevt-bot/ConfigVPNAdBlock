@@ -186,7 +186,15 @@ func wgSplitAddr(addr string) (string, uint16, error) {
 }
 
 func wgDialTCP(addr string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	return wgDialTCPTimeout(addr, 5*time.Second)
+}
+
+// wgDialTCPTimeout — параметризованный дедлайн. Для DoH/DoT используем
+// короткий таймаут: быстрый RST, клиент откатывается на системный DNS
+// через TUN (мы его и так фильтруем), а не висит 5 секунд на мёртвом
+// upstream (QUIC у нас DROP, Chrome идёт в TCP-DoH -> 10s-зависания).
+func wgDialTCPTimeout(addr string, timeout time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	started := time.Now()
 	c, err := wgDialTCPContext(ctx, addr)
