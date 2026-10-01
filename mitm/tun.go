@@ -1763,17 +1763,16 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// (как остальной UDP ниже). Дроп QUIC (форсинг TCP->MITM) ломал скорость
 	// Google/YouTube, а фильтрации не добавлял: их пиннинг всё равно не даёт
 	// MITM, SNI-блокировка и DNS-фильтр продолжают работать.
+	// Откат эксперимента QUIC-relay: через двойной userspace-стек QUIC
+	// не взлетел (QUIC_RELAY total=1 за полторы минуты), стало хуже.
+	// Возврат к рабочей базе (working-baseline-20261001): дроп QUIC ->
+	// форсинг TCP -> SNI-блок/MITM. Скорость Google - компромисс архитектуры.
 	if id.LocalPort == 443 {
-		ip := id.LocalAddress.String()
-		if isQuicAdIP(ip) {
-			atomic.AddInt64(&quicDrops, 1)
-			flowLog("QUIC_AD_DROP dst=" + ip)
-			return
-		}
-		n := atomic.AddInt64(&quicRelays, 1)
+		n := atomic.AddInt64(&quicDrops, 1)
 		if n == 1 || n%64 == 0 {
-			flowLog(fmt.Sprintf("QUIC_RELAY total=%d dst=%s", n, ip))
+			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s", n, id.LocalAddress.String()))
 		}
+		return
 	}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
 	if id.LocalAddress.String() == dzenFakeIP {
