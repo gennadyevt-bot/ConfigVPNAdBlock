@@ -1759,14 +1759,15 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		flowLog(fmt.Sprintf("udp dst=%s:%d fam=%s", id.LocalAddress.String(), id.LocalPort, ufam))
 	}
 
-	// UDP/443 (QUIC/HTTP3) — ВРЕМЕННЫЙ ТЕСТ 0.5.75 (GPT): НЕ дропаем,
-	// пропускаем обычным protected UDP relay, как остальной UDP.
+	// UDP/443 (QUIC/HTTP3): ПРОПУСКАЕМ через обычный duplex UDP-relay
+	// (как остальной UDP ниже). Дроп QUIC (форсинг TCP->MITM) ломал скорость
+	// Google/YouTube, а фильтрации не добавлял: их пиннинг всё равно не даёт
+	// MITM, SNI-блокировка и DNS-фильтр продолжают работать.
 	if id.LocalPort == 443 {
 		n := atomic.AddInt64(&quicDrops, 1)
 		if n == 1 || n%64 == 0 {
-			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s", n, id.LocalAddress.String()))
+			flowLog(fmt.Sprintf("QUIC_RELAY total=%d dst=%s", n, id.LocalAddress.String()))
 		}
-		return
 	}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
 	if id.LocalAddress.String() == dzenFakeIP {
