@@ -118,30 +118,12 @@ class AppMonitorService : Service() {
 
         android.util.Log.d("AppMonitor", "Should connect: $shouldConnect (fg=$foregroundApp)")
 
-        // alpha65: жизненным циклом VPN управляет ТОЛЬКО пользователь.
-        // Монитор никогда не подключает туннель сам (это ломало ручное
-        // отключение: VPN сам включался обратно). Монитор лишь ПЕРЕКЛЮЧАЕТ
-        // тракт (AdBlock вкл/выкл) при уже поднятом туннеле:
-        // выбранное приложение на экране → простой тракт (QUIC-приложения
-        // работают нативно), остальное → AdBlock-тракт.
-        if (VpnManager.globalStatus != VpnStatus.CONNECTED) {
-            cancelPendingAdblockRestore()
-            return
-        }
-        if (shouldConnect) {
-            cancelPendingDisconnect()
-            cancelPendingAdblockRestore()
-            if (VpnManager.lastTunnelAdblock != false) {
-                android.util.Log.d("AppMonitor", "Switch to PLAIN tunnel for app: $foregroundApp")
-                vpnTriggeredByAppMonitor = true
-                autoConnectVpn(adBlock = false)
-            }
-        } else {
-            // Вернуть AdBlock-тракт через grace-период (5 с), не отключая VPN.
-            if (VpnManager.lastTunnelAdblock == false) {
-                scheduleAdblockRestore()
-            }
-        }
+        // alpha67: переключение трактов УДАЛЕНО целиком. Оно давало застревание
+        // в простом тракте и «AdBlock не работает». Схема финальная и простая:
+        // туннель всегда с фильтрацией (как глобальный режим, который работает
+        // идеально), список App VPN — только маршрутизация через
+        // addAllowedApplication. Монитор ничего не переключает и не подключает.
+        return
     }
 
     private var adblockRestorePending = false
