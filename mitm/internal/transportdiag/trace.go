@@ -31,6 +31,48 @@ type Trace struct {
 	TCPDialStarted, SynTx, SynAckRx, ConnectOK, ConnectTimeout, EndpointClosed, ActiveEndpoints atomic.Int64
 	PacketRxDropped, PacketTxDropped                                                            atomic.Int64
 	OuterTX, OuterRX, OuterTXErrors, OuterRXErrors                                              atomic.Uint64
+	// alpha51: счётчики SYN на границе engine-TUN. SynTx (gVisor) vs
+	// TunSynRx (движок прочитал из TUN) показывают потери между стеком и
+	// движком; TunSynRtx — ретрансмиты SYN (gVisor не получил SYN-ACK);
+	// TunSynAck — SYN-ACK реально дошёл до TUN от движка.
+	TunSynRx, TunSynRtx, TunSynAck                                                              atomic.Int64
+	synMu                                                                                       sync.Mutex
+	synCount                                                                                    map[string]int
+}
+
+// SynIn: SYN (без ACK) уходит в движок. Возвращает номер попытки (1=первый).
+func (t *Trace) SynIn(key string) int {
+	t.TunSynRx.Add(1)
+	t.synMu.Lock()
+	defer t.synMu.Unlock()
+	if t.synCount == nil {
+		t.synCount = make(map[string]int, 512)
+	}
+	if len(t.synCount) > 4096 {
+		t.synCount = make(map[string]int, 512)
+	}
+	t.synCount[key]++
+	return t.synCount[key]
+}
+
+// SynAckTun: входящий SYN-ACK дошёл до TUN от движка (расшифрован).
+func (t *Trace) SynAckTun(key string) {
+	t.TunSynAck.Add(1)
+	t.synMu.Lock()
+	delete(t.synCount, key)
+	t.synMu.Unlock()
+}
+
+// FlowLogf пишет строку в журнал приложения. Логгер задаётся хост-пакетом
+// через SetFlowLogger (из mitm подключается flowLog -> adblock_journal).
+var flowLogger atomic.Value // func(string)
+
+func SetFlowLogger(f func(string)) { flowLogger.Store(f) }
+
+func FlowLogf(format string, args ...any) {
+	if v := flowLogger.Load(); v != nil {
+		v.(func(string))(fmt.Sprintf(format, args...))
+	}
 }
 
 func New() *Trace { return &Trace{flows: make(map[Key]*Flow)} }
@@ -163,7 +205,7 @@ func parse(p []byte, in bool) (Key, uint32, uint32, byte, bool) {
 	return k, binary.BigEndian.Uint32(p[o+4 : o+8]), binary.BigEndian.Uint32(p[o+8 : o+12]), p[o+13], true
 }
 func (t *Trace) Stats() string {
-	return fmt.Sprintf("tcpDialStarted=%d synTx=%d synAckRx=%d connectOk=%d connectTimeout=%d endpointClosed=%d activeEndpoints=%d packetRxDropped=%d packetTxDropped=%d WG_OUTER_TX=%d WG_OUTER_RX=%d outerTxErrors=%d outerRxErrors=%d", t.TCPDialStarted.Load(), t.SynTx.Load(), t.SynAckRx.Load(), t.ConnectOK.Load(), t.ConnectTimeout.Load(), t.EndpointClosed.Load(), t.ActiveEndpoints.Load(), t.PacketRxDropped.Load(), t.PacketTxDropped.Load(), t.OuterTX.Load(), t.OuterRX.Load(), t.OuterTXErrors.Load(), t.OuterRXErrors.Load())
+	return fmt.Sprintf("tcpDialStarted=%d synTx=%d synAckRx=%d connectOk=%d connectTimeout=%d endpointClosed=%d activeEndpoints=%d packetRxDropped=%d packetTxDropped=%d WG_OUTER_TX=%d WG_OUTER_RX=%d outerTxErrors=%d outerRxErrors=%d tunSynRx=%d tunSynRtx=%d tunSynAck=%d", t.TCPDialStarted.Load(), t.SynTx.Load(), t.SynAckRx.Load(), t.ConnectOK.Load(), t.ConnectTimeout.Load(), t.EndpointClosed.Load(), t.ActiveEndpoints.Load(), t.PacketRxDropped.Load(), t.PacketTxDropped.Load(), t.OuterTX.Load(), t.OuterRX.Load(), t.OuterTXErrors.Load(), t.OuterRXErrors.Load(), t.TunSynRx.Load(), t.TunSynRtx.Load(), t.TunSynAck.Load())
 }
 
 func (t *Trace) Failures() string {

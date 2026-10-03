@@ -28,6 +28,10 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 )
 
+// alpha51: подключаем журнал приложения к transportdiag.FlowLogf,
+// чтобы SYN_RTX-строки движка попадали в adblock_journal.log.
+func init() { transportdiag.SetFlowLogger(flowLog) }
+
 var (
 	wgUpstreamMu sync.RWMutex
 	wgUpstream   *wgUpstreamStack

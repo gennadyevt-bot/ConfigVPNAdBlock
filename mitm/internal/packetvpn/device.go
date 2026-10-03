@@ -3,9 +3,11 @@ package packetvpn
 
 import (
 	"configadblock/mitm/internal/transportdiag"
+	"encoding/binary"
 	"fmt"
 	"golang.org/x/sys/unix"
 	"io"
+	"net"
 	"os"
 	"sync"
 
@@ -45,14 +47,63 @@ func (t *packetTun) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	}
 	if t.trace != nil {
 		t.trace.Packet("PACKET_TO_WG", bufs[0][offset:offset+n], false)
+		t.synOutbound(bufs[0][offset : offset+n])
 	}
 	sizes[0] = n
 	return 1, nil
+}
+
+// synOutbound детектит SYN (без ACK), уходящие в движок. Повторный SYN
+// по тому же 4-tuple = ретрансмит: gVisor не получил SYN-ACK. Это
+// различает "движок проглотил SYN" и "SYN ушёл, но ответ не вернулся".
+func (t *packetTun) synOutbound(p []byte) {
+	if len(p) < 40 || p[0]>>4 != 4 || p[9] != 6 { // не IPv4/TCP
+		return
+	}
+	o := int(p[0]&15) * 4
+	if len(p) < o+20 || binary.BigEndian.Uint16(p[6:8])&0x3fff != 0 {
+		return // фрагмент — не первый
+	}
+	fl := p[o+13]
+	if fl&0x02 == 0 || fl&0x10 != 0 {
+		return // не чистый SYN
+	}
+	key := fmt.Sprintf("%s:%d>%s:%d",
+		net.IP(p[12:16]), binary.BigEndian.Uint16(p[o:o+2]),
+		net.IP(p[16:20]), binary.BigEndian.Uint16(p[o+2:o+4]))
+	n := t.trace.SynIn(key)
+	if n == 2 {
+		t.trace.TunSynRtx.Add(1)
+		transportdiag.FlowLogf("SYN_RTX %s n=2", key)
+	} else if n == 4 {
+		transportdiag.FlowLogf("SYN_RTX %s n=4", key)
+	}
+}
+
+// synInbound детектит SYN-ACK, пришедшие от движка (расшифрованные).
+// Удаляет 4-tuple из счётчика ретрансмитов — handshake завершился.
+func (t *packetTun) synInbound(p []byte) {
+	if len(p) < 40 || p[0]>>4 != 4 || p[9] != 6 {
+		return
+	}
+	o := int(p[0]&15) * 4
+	if len(p) < o+20 || binary.BigEndian.Uint16(p[6:8])&0x3fff != 0 {
+		return
+	}
+	if p[o+13]&0x12 != 0x12 {
+		return // не SYN+ACK
+	}
+	// SYN шёл client>server; SYN-ACK идёт server>client — ключ зеркалим.
+	key := fmt.Sprintf("%s:%d>%s:%d",
+		net.IP(p[16:20]), binary.BigEndian.Uint16(p[o+2:o+4]),
+		net.IP(p[12:16]), binary.BigEndian.Uint16(p[o:o+2]))
+	t.trace.SynAckTun(key)
 }
 func (t *packetTun) Write(bufs [][]byte, offset int) (int, error) {
 	for i, b := range bufs {
 		if t.trace != nil {
 			t.trace.Packet("PACKET_FROM_WG", b[offset:], true)
+			t.synInbound(b[offset:])
 		}
 		n, err := t.file.Write(b[offset:])
 		if err != nil {
