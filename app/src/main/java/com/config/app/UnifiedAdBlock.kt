@@ -18,7 +18,7 @@ import java.io.File
  *   UNIFIED_ADBLOCK_STOP / UNIFIED_ADBLOCK_ERROR <reason>
  */
 object UnifiedAdBlock {
-    const val SOURCE = "alpha63-unified"
+    const val SOURCE = "alpha64-unified"
 
     @Volatile
     var running: Boolean = false

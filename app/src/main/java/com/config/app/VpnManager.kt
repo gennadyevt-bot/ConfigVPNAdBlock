@@ -63,6 +63,7 @@ class VpnManager private constructor(private val context: Context) {
         // и молча глушил все повторные connect'ы (VPN не поднимался вообще).
         // Гонка запросов решается на уровне request_id в UnifiedVpnService.
         android.util.Log.i("ConfigVPN", "connect: call server=" + server.name)
+        pendingAdBlockOverride = adBlockOverride
         scope.launch {
             try {
                 val prepareIntent = VpnService.prepare(context)
@@ -136,11 +137,12 @@ class VpnManager private constructor(private val context: Context) {
         context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
         // AdBlock ON: Android TUN → фильтр → WG/AWG packet engine.
         // При ошибке фильтра подключение завершается с явной ошибкой.
-        // alpha61: adBlockOverride — режим App VPN переключает тракт:
-        // foreground-приложение из списка → простой путь (QUIC-приложения
-        // работают), остальные → AdBlock-тракт. null = читать pref.
-        val adblockActive = adBlockOverride
+        // alpha61/64: adBlockOverride (через companion от connect()) — режим
+        // App VPN переключает тракт: foreground-приложение из списка →
+        // простой путь (QUIC-приложения работают), остальные → AdBlock-тракт.
+        val adblockActive = pendingAdBlockOverride
             ?: context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", true)
+        pendingAdBlockOverride = null
         lastTunnelAdblock = adblockActive
         if (adblockActive) {
             val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server)
@@ -183,15 +185,20 @@ class VpnManager private constructor(private val context: Context) {
             currentAwgConfig = config
             usingAwg = true
 
-            if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", true)) {
+            val awgAdblock = pendingAdBlockOverride
+                ?: context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", true)
+            pendingAdBlockOverride = null
+            if (awgAdblock) {
                 context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
                 val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server, awg = true)
                 if (adOk) {
+                    lastTunnelAdblock = true
                     dbg("ADBLOCK: AWG datapath active")
                     return
                 }
                 throw IllegalStateException("AdBlock не запущен. Откройте журнал AdBlock")
             }
+            lastTunnelAdblock = false
 
             val t0 = System.currentTimeMillis()
             awgBackend.setState(AwgTunnel.getInstance(), AwgBackendTunnel.State.UP, config)
@@ -328,6 +335,11 @@ class VpnManager private constructor(private val context: Context) {
         // Нужен монитору, чтобы не переподключаться без изменений состояния.
         @Volatile
         var lastTunnelAdblock: Boolean? = null
+
+        // alpha64: override AdBlock-тракта от монитора App VPN. connect()
+        // кладёт сюда параметр, connectWg/connectAwg читают и сбрасывают.
+        @Volatile
+        var pendingAdBlockOverride: Boolean? = null
 
         @Volatile
         private var instance: VpnManager? = null
