@@ -1972,13 +1972,19 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 	up, err := dialUDP(dst)
 	if err != nil {
+		// alpha60: инструментация QUIC-pass релея — где именно рвётся тракт.
+		flowLog("UDP_RELAY_ATTACH_FAIL dst=" + dst + " err=" + err.Error())
 		return
 	}
 	defer up.Close()
 	if _, err := up.Write(buf[:n]); err != nil {
+		flowLog("UDP_RELAY_WRITE_FAIL dst=" + dst + " err=" + err.Error())
 		return
 	}
 	atomic.AddInt64(&quicRelays, 1)
+	if id.LocalPort == 443 {
+		flowLog(fmt.Sprintf("UDP_RELAY_QUIC_ATTACHED dst=%s first=%dB", dst, n))
+	}
 
 	go func() {
 		cbuf := make([]byte, 64*1024)
@@ -1994,16 +2000,31 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}()
 
 	rbuf := make([]byte, 64*1024)
+	firstReply := true
 	for {
 		_ = up.SetReadDeadline(time.Now().Add(60 * time.Second))
 		rn, rerr := up.Read(rbuf)
 		if rerr != nil || rn <= 0 {
+			if id.LocalPort == 443 {
+				flowLog("UDP_RELAY_QUIC_REPLY_END dst=" + dst + " err=" + mapErr(rerr))
+			}
 			return
+		}
+		if firstReply && id.LocalPort == 443 {
+			firstReply = false
+			flowLog(fmt.Sprintf("UDP_RELAY_QUIC_FIRST_REPLY dst=%s n=%dB", dst, rn))
 		}
 		if _, werr := conn.Write(rbuf[:rn]); werr != nil {
 			return
 		}
 	}
+}
+
+func mapErr(e error) string {
+	if e == nil {
+		return "eof"
+	}
+	return e.Error()
 }
 func quicICMPUnreach(localPort uint16, local, remote tcpip.Address, remotePort uint16) {
 	stackMu.Lock()
