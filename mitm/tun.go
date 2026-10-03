@@ -1906,6 +1906,52 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 
 // quicICMPUnreach строит и пишет в TUN ICMP Destination Unreachable
 // (port unreachable) «от сервера» приложению, чей QUIC-пакет мы дропнули.
+	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
+	if id.LocalAddress.String() == dzenFakeIP {
+		flowLog("QUIC_FAKEIP_DROP dst=" + id.LocalAddress.String())
+		return
+	}
+	// прочий UDP: ПОЛНЫЙ ДУПЛЕКС (0.5.76 GPT) — первый пакет ушёл в up
+	// выше, дальше два независимых направления с разными буферами:
+	//   conn -> up  (фоновая горутина читает новые датаграммы клиента)
+	//   up   -> conn (основной цикл отдаёт ответы апстрима)
+	// При ошибке или таймауте (60 с простоя) поток закрывается целиком.
+	dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
+	up, err := dialUDP(dst)
+	if err != nil {
+		return
+	}
+	defer up.Close()
+	if _, err := up.Write(buf[:n]); err != nil {
+		return
+	}
+	atomic.AddInt64(&quicRelays, 1)
+
+	go func() {
+		cbuf := make([]byte, 64*1024)
+		for {
+			cn, cerr := conn.Read(cbuf)
+			if cerr != nil || cn <= 0 {
+				return
+			}
+			if _, werr := up.Write(cbuf[:cn]); werr != nil {
+				return
+			}
+		}
+	}()
+
+	rbuf := make([]byte, 64*1024)
+	for {
+		_ = up.SetReadDeadline(time.Now().Add(60 * time.Second))
+		rn, rerr := up.Read(rbuf)
+		if rerr != nil || rn <= 0 {
+			return
+		}
+		if _, werr := conn.Write(rbuf[:rn]); werr != nil {
+			return
+		}
+	}
+}
 func quicICMPUnreach(localPort uint16, local, remote tcpip.Address, remotePort uint16) {
 	stackMu.RLock()
 	f := stackFile
@@ -2022,50 +2068,4 @@ func buildICMPv6Unreach(server, app tcpip.Address, serverPort, appPort uint16) [
 	copy(ip6[24:40], cl[:])
 	copy(pkt[40:], icmp)
 	return pkt
-}
-	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
-	if id.LocalAddress.String() == dzenFakeIP {
-		flowLog("QUIC_FAKEIP_DROP dst=" + id.LocalAddress.String())
-		return
-	}
-	// прочий UDP: ПОЛНЫЙ ДУПЛЕКС (0.5.76 GPT) — первый пакет ушёл в up
-	// выше, дальше два независимых направления с разными буферами:
-	//   conn -> up  (фоновая горутина читает новые датаграммы клиента)
-	//   up   -> conn (основной цикл отдаёт ответы апстрима)
-	// При ошибке или таймауте (60 с простоя) поток закрывается целиком.
-	dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
-	up, err := dialUDP(dst)
-	if err != nil {
-		return
-	}
-	defer up.Close()
-	if _, err := up.Write(buf[:n]); err != nil {
-		return
-	}
-	atomic.AddInt64(&quicRelays, 1)
-
-	go func() {
-		cbuf := make([]byte, 64*1024)
-		for {
-			cn, cerr := conn.Read(cbuf)
-			if cerr != nil || cn <= 0 {
-				return
-			}
-			if _, werr := up.Write(cbuf[:cn]); werr != nil {
-				return
-			}
-		}
-	}()
-
-	rbuf := make([]byte, 64*1024)
-	for {
-		_ = up.SetReadDeadline(time.Now().Add(60 * time.Second))
-		rn, rerr := up.Read(rbuf)
-		if rerr != nil || rn <= 0 {
-			return
-		}
-		if _, werr := conn.Write(rbuf[:rn]); werr != nil {
-			return
-		}
-	}
 }
