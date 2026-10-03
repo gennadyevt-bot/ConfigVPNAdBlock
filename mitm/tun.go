@@ -1926,26 +1926,6 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}
 
 
-// udp6Checksum: контрольная сумма UDP поверх IPv6 (обязательна).
-func udp6Checksum(udp []byte, src, dst tcpip.Address) uint16 {
-	s := src.As16()
-	d := dst.As16()
-	sum := uint32(len(udp)) + 17
-	for i := 0; i < 16; i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(s[i:]))
-		sum += uint32(binary.BigEndian.Uint16(d[i:]))
-	}
-	for i := 0; i+1 < len(udp); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(udp[i:]))
-	}
-	if len(udp)%2 == 1 {
-		sum += uint32(udp[len(udp)-1]) << 8
-	}
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
-}
 
 // quicICMPUnreach строит и пишет в TUN ICMP Destination Unreachable
 // (port unreachable) «от сервера» приложению, чей QUIC-пакет мы дропнули.
@@ -2155,4 +2135,25 @@ func buildQUICVN(client []byte) []byte {
 	vn = append(vn, 0xde, 0xad, 0x00, 0x01)
 	vn = append(vn, 0x1a, 0x2b, 0x3c, 0x4d)
 	return vn
+}
+
+// udp6Checksum: контрольная сумма UDP поверх IPv6 (обязательна).
+func udp6Checksum(udp []byte, src, dst tcpip.Address) uint16 {
+	s := src.As16()
+	d := dst.As16()
+	sum := uint32(len(udp)) + 17
+	for i := 0; i < 16; i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(s[i:]))
+		sum += uint32(binary.BigEndian.Uint16(d[i:]))
+	}
+	for i := 0; i+1 < len(udp); i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(udp[i:]))
+	}
+	if len(udp)%2 == 1 {
+		sum += uint32(udp[len(udp)-1]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	return ^uint16(sum)
 }
