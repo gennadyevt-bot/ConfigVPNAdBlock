@@ -142,10 +142,12 @@ class AppVpnActivity : AppCompatActivity() {
             }
 
             if (enabled) {
-                AppMonitorService.start(this)
-                if (VpnManager.globalStatus == VpnStatus.DISCONNECTED) {
-                    autoConnectVpn()
-                }
+                // alpha54: App VPN = только маршрутизация (список уходит в
+                // addAllowedApplication/addDisallowedApplication при establish).
+                // Монитор больше не управляет жизненным циклом. connect()
+                // переподключает безусловно: при поднятом VPN применит новый
+                // список, при опущенном — поднимет туннель.
+                autoConnectVpn()
                 val modeText = if (isIncludeMode) "через VPN" else "обход VPN"
                 Toast.makeText(this, "Сохранено: ${selectedPackages.size} приложений ($modeText)", Toast.LENGTH_SHORT).show()
             } else {
