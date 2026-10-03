@@ -142,11 +142,12 @@ class AppVpnActivity : AppCompatActivity() {
             }
 
             if (enabled) {
-                // alpha54: App VPN = только маршрутизация (список уходит в
-                // addAllowedApplication/addDisallowedApplication при establish).
-                // Монитор больше не управляет жизненным циклом. connect()
-                // переподключает безусловно: при поднятом VPN применит новый
-                // список, при опущенном — поднимет туннель.
+                // alpha59: возврат Smart App VPN — монитор снова запускается
+                // и управляет жизненным циклом; маршрутизация выбранных
+                // приложений по-прежнему через addAllowedApplication.
+                // connect() переподключает безусловно: при поднятом VPN
+                // применит новый список, при опущенном — поднимет туннель.
+                AppMonitorService.start(this)
                 autoConnectVpn()
                 val modeText = if (isIncludeMode) "через VPN" else "обход VPN"
                 Toast.makeText(this, "Сохранено: ${selectedPackages.size} приложений ($modeText)", Toast.LENGTH_SHORT).show()

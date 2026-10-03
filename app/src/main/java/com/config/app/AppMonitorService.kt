@@ -93,13 +93,10 @@ class AppMonitorService : Service() {
             vpnTriggeredByAppMonitor = false
         }
 
-        // alpha54: режим App VPN — только маршрутизация через
-        // addAllowedApplication/addDisallowedApplication при establish.
-        // Жизненным циклом VPN управляет пользователь (connect/disconnect
-        // с главного экрана); монитор больше не подключает и не отключает
-        // и не следит за foreground-приложениями.
-        return
-
+        // alpha59: возврат Smart App VPN — монитор снова управляет
+        // жизненным циклом (авто-подключение при входе в выбранное
+        // приложение, авто-отключение по таймауту после выхода).
+        // Маршрутизация по-прежнему через addAllowedApplication.
         val foregroundApp = getForegroundApp() ?: return
         if (foregroundApp != lastForegroundApp) {
             lastForegroundApp = foregroundApp
