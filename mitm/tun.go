@@ -1894,6 +1894,15 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		if n == 1 || n%64 == 0 {
 			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
 		}
+		// alpha53: вместо молчаливого дропа шлём мусорный датаграмм
+		// клиенту. Тихая чёрная дына заставляла приложения (YouTube/Cronet)
+		// бесконечно ретранслировать QUIC Initial и НЕ откатываться на TCP
+		// (App VPN + AdBlock: t443Seen=0 за 28+ сек). Мусор сразу фейлит
+		// QUIC-handshake -> клиент уходит в TCP за секунды, в обоих режимах.
+		if n == 1 {
+			flowLog("QUIC_RST garbage-datagram fallback trigger on")
+		}
+		_, _ = conn.Write([]byte{0x00})
 		return
 	}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
