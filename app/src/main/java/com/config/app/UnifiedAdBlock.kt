@@ -18,7 +18,7 @@ import java.io.File
  *   UNIFIED_ADBLOCK_STOP / UNIFIED_ADBLOCK_ERROR <reason>
  */
 object UnifiedAdBlock {
-    const val SOURCE = "alpha57-unified"
+    const val SOURCE = "alpha58-unified"
 
     @Volatile
     var running: Boolean = false
@@ -83,6 +83,11 @@ object UnifiedAdBlock {
                     })
                 mitm.Mitm.startProxy(filesDir.absolutePath, blFile.absolutePath)
                 mitm.Mitm.setContentFilter(true)
+                // alpha58: в режиме App VPN (include) QUIC не дропаем,
+                // а пропускаем через туннель — Cronet (YouTube) не
+                // откатывается на TCP никак, а YouTube нефильтруем.
+                val appVpn = AppVpnStorage(this)
+                mitm.Mitm.setQuicPass(appVpn.isEnabled() && (appVpn.getSelectedPackages().isNotEmpty() || appVpn.getExcludedPackages().isNotEmpty()))
 
                 ready = true
                 marker("UNIFIED_ADBLOCK_READY")

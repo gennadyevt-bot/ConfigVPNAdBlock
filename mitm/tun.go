@@ -402,6 +402,7 @@ var (
 	t443seen   int64
 	quicRelays int64
 	quicDrops  int64
+	quicPassCount int64
 	quicPass   int64
 	udpSeen    int64
 	tcp4N      int64
@@ -1038,6 +1039,24 @@ func SetContentFilter(on bool) {
 }
 
 func contentFilterEnabled() bool { return atomic.LoadInt64(&contentFilterOn) == 1 }
+
+// quicPassOn: режим App VPN (include) — QUIC/443 НЕ дропаем, а пускаем
+// через обычный UDP-релей туннеля. Причина: Cronet (YouTube) не откатывается
+// на TCP ни через чёрную дыну, ни через ICMP, ни через forged VN — сидит на
+// QUIC бесконечно, приложение не грузится. YouTube pinned и нефильтруем,
+// поэтому пропуск его QUIC ничего не теряет для блокировки рекламы.
+var quicPassOn int64
+
+// SetQuicPass переключает пропуск QUIC (вызывается из Kotlin).
+func SetQuicPass(on bool) {
+	if on {
+		atomic.StoreInt64(&quicPassOn, 1)
+	} else {
+		atomic.StoreInt64(&quicPassOn, 0)
+	}
+}
+
+func quicPassEnabled() bool { return atomic.LoadInt64(&quicPassOn) == 1 }
 
 // --- DNS_ALLOW 0.5.79 (GPT, диагностика): последние 100-150 УНИКАЛЬНЫХ
 // разрешённых доменов. Очищается при каждом запуске VPN. Блокировки нет.
@@ -1882,7 +1901,18 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// не взлетел (QUIC_RELAY total=1 за полторы минуты), стало хуже.
 	// Возврат к рабочей базе (working-baseline-20261001): дроп QUIC ->
 	// форсинг TCP -> SNI-блок/MITM. Скорость Google - компромисс архитектуры.
-	if id.LocalPort == 443 {
+	if id.LocalPort == 443 && quicPassEnabled() {
+		// alpha58: режим App VPN — QUIC пропускаем в общий UDP-релей без
+		// дропа. Причина: Cronet (YouTube) не откатывается на TCP ни через
+		// чёрную дыну, ни через ICMP, ни через forged VN — сидит на QUIC
+		// бесконечно, приложение не грузится. YouTube pinned и нефильтруем,
+		// пропуск его QUIC ничего не теряет для блокировки рекламы.
+		n := atomic.AddInt64(&quicPassCount, 1)
+		if n == 1 || n%64 == 0 {
+			flowLog(fmt.Sprintf("QUIC_PASS total=%d dst=%s", n, id.LocalAddress.String()))
+		}
+		// проваливаемся в общий UDP-релей ниже
+	} else if id.LocalPort == 443 {
 		// alpha48: ОТКАТ селективного QUIC (alpha46/47). Пропуск UDP/443
 		// через gVisor->WG UDP-relay дал регрессии (alpha46 — чёрная дыра
 		// для кэшированных IP Chrome; alpha47 — пропуск всех неизвестных
