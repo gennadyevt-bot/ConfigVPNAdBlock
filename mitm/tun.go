@@ -1895,14 +1895,57 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		if n == 1 || n%64 == 0 {
 			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
 		}
-		// alpha55: QUIC-клиенты терпят мусор, но чтут ICMP port-unreachable:
-		// Cronet/Chrome получают его -> мгновенный откат на TCP. Пакет пишем
-		// напрямую в TUN-fd (stackFile): запись туда доставляет пакеты
-		// приложениям, минуя gVisor-буферы. Без этого App VPN + AdBlock
-		// держал YouTube на бесконечном QUIC-ретрансмите (t443Seen=0).
+		// alpha57: Cronet НЕ откатывался на TCP ни через чёрную дыну,
+		// ни через мусор, ни через ICMP unreachable (40 дропов / 2.5 мин,
+		// t443Seen=0). Отвечаем поддельным QUIC Version Negotiation:
+		// клиент не находит совместимой версии -> handshake падает мгновенно
+		// -> TCP. VN — открытый пакет, криптография не нужна.
+		if d, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+			d.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+		}
+		buf := make([]byte, 1600)
+		m, rerr := conn.Read(buf)
+		if rerr == nil {
+			if vn := buildQUICVN(buf[:m]); vn != nil {
+				udp := make([]byte, 8+len(vn))
+				binary.BigEndian.PutUint16(udp[0:2], id.LocalPort)
+				binary.BigEndian.PutUint16(udp[2:4], id.RemotePort)
+				binary.BigEndian.PutUint16(udp[4:6], uint16(len(udp)))
+				copy(udp[8:], vn)
+				if strings.Contains(id.RemoteAddress.String(), ":") {
+					binary.BigEndian.PutUint16(udp[6:8], udp6Checksum(udp, id.LocalAddress, id.RemoteAddress))
+				}
+				_, _ = conn.Write(udp)
+				if n == 1 {
+					flowLog("QUIC_VN version-negotiation fallback trigger on")
+				}
+			}
+		}
 		quicICMPUnreach(id.LocalPort, id.LocalAddress, id.RemoteAddress, id.RemotePort)
 		return
 	}
+
+
+// udp6Checksum: контрольная сумма UDP поверх IPv6 (обязательна).
+func udp6Checksum(udp []byte, src, dst tcpip.Address) uint16 {
+	s := src.As16()
+	d := dst.As16()
+	sum := uint32(len(udp)) + 17
+	for i := 0; i < 16; i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(s[i:]))
+		sum += uint32(binary.BigEndian.Uint16(d[i:]))
+	}
+	for i := 0; i+1 < len(udp); i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(udp[i:]))
+	}
+	if len(udp)%2 == 1 {
+		sum += uint32(udp[len(udp)-1]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	return ^uint16(sum)
+}
 
 // quicICMPUnreach строит и пишет в TUN ICMP Destination Unreachable
 // (port unreachable) «от сервера» приложению, чей QUIC-пакет мы дропнули.
@@ -2078,4 +2121,38 @@ func buildICMPv6Unreach(server, app tcpip.Address, serverPort, appPort uint16) [
 	copy(ip6[24:40], cl[:])
 	copy(pkt[40:], icmp)
 	return pkt
+}
+
+// buildQUICVN собирает QUIC Version Negotiation с несовместимыми версиями:
+// клиент завершает попытку с ошибкой "no compatible version" (RFC 9000 §5.2).
+func buildQUICVN(client []byte) []byte {
+	if len(client) < 7 || client[0]&0x80 == 0 {
+		return nil
+	}
+	if binary.BigEndian.Uint32(client[1:5]) == 0 {
+		return nil
+	}
+	dcidLen := int(client[5])
+	p := 6
+	if p+dcidLen+1 > len(client) {
+		return nil
+	}
+	scidLen := int(client[p+dcidLen])
+	scidStart := p + dcidLen + 1
+	if scidLen > 20 || scidStart+scidLen > len(client) {
+		return nil
+	}
+	clientSCID := client[scidStart : scidStart+scidLen]
+	scid := make([]byte, 8)
+	binary.LittleEndian.PutUint64(scid, uint64(time.Now().UnixNano()))
+	vn := make([]byte, 0, 7+scidLen+1+8+8)
+	vn = append(vn, 0xc0)
+	vn = append(vn, 0, 0, 0, 0)
+	vn = append(vn, byte(scidLen))
+	vn = append(vn, clientSCID...)
+	vn = append(vn, byte(len(scid)))
+	vn = append(vn, scid...)
+	vn = append(vn, 0xde, 0xad, 0x00, 0x01)
+	vn = append(vn, 0x1a, 0x2b, 0x3c, 0x4d)
+	return vn
 }
