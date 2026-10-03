@@ -23,7 +23,7 @@ class AdBlockActivity : AppCompatActivity() {
         prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
         sw = findViewById(R.id.swAdBlockMain)
         tvStatus = findViewById(R.id.tvAdBlockStatusMain)
-        sw.isChecked = prefs.getBoolean("adblock_enabled", false)
+        sw.isChecked = prefs.getBoolean("adblock_enabled", true)
         updateStatus()
         sw.setOnCheckedChangeListener { _, on ->
             prefs.edit().putBoolean("adblock_enabled", on).apply()
@@ -152,7 +152,7 @@ class AdBlockActivity : AppCompatActivity() {
     }
 
     private fun updateStatus() {
-        val on = prefs.getBoolean("adblock_enabled", false)
+        val on = prefs.getBoolean("adblock_enabled", true)
         tvStatus.text = when {
             !on -> "Отключено"
             UnifiedVpnService.active && UnifiedAdBlock.ready -> "Фильтр запущен • результаты в журнале"

@@ -136,8 +136,8 @@ class MainActivity : AppCompatActivity() {
             tvAdBlockStatus.text = if (on) "вкл" else "выкл"
             tvAdBlockStatus.setTextColor(if (on) 0xFF8BC34A.toInt() else 0xFF9CCC9C.toInt())
         }
-        renderAdBlock(adPrefs.getBoolean("adblock_enabled", false))
-        swAdBlock.isChecked = adPrefs.getBoolean("adblock_enabled", false)
+        renderAdBlock(adPrefs.getBoolean("adblock_enabled", true))
+        swAdBlock.isChecked = adPrefs.getBoolean("adblock_enabled", true)
         swAdBlock.setOnCheckedChangeListener { _, on ->
             adPrefs.edit().putBoolean("adblock_enabled", on).apply()
             renderAdBlock(on)

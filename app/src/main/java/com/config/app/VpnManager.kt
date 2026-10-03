@@ -103,7 +103,7 @@ class VpnManager private constructor(private val context: Context) {
 
                 withContext(Dispatchers.Main) {
                     if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                            .getBoolean("adblock_enabled", false) &&
+                            .getBoolean("adblock_enabled", true) &&
                         (!UnifiedVpnService.active || !UnifiedAdBlock.ready)) {
                         throw IllegalStateException("AdBlock остановился во время подключения")
                     }
@@ -136,7 +136,7 @@ class VpnManager private constructor(private val context: Context) {
         context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
         // AdBlock ON: Android TUN → фильтр → WG/AWG packet engine.
         // При ошибке фильтра подключение завершается с явной ошибкой.
-        if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) {
+        if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", true)) {
             val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server)
             if (adOk) {
                 dbg("ADBLOCK: ACTIVE")
@@ -177,7 +177,7 @@ class VpnManager private constructor(private val context: Context) {
             currentAwgConfig = config
             usingAwg = true
 
-            if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) {
+            if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", true)) {
                 context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
                 val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server, awg = true)
                 if (adOk) {
@@ -196,7 +196,7 @@ class VpnManager private constructor(private val context: Context) {
             }
             probePaths()
         } catch (e: Exception) {
-            if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) throw e
+            if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", true)) throw e
             // Фолбэк: сервер не принял junk-параметры — пробуем обычный WireGuard
             android.util.Log.w("ConfigVPN", "AWG failed, falling back to plain WireGuard", e)
             dbg("AWG FAILED: " + (e.stackTraceToString() ?: e.toString()).take(1500))
