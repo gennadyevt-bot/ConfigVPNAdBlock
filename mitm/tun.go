@@ -1960,10 +1960,11 @@ func quicICMPUnreach(localPort uint16, local, remote tcpip.Address, remotePort u
 		return
 	}
 	var pkt []byte
+	lv6, rv6 := strings.Contains(local.String(), ":"), strings.Contains(remote.String(), ":")
 	switch {
-	case local.Is4() && remote.Is4():
+	case !lv6 && !rv6:
 		pkt = buildICMPv4Unreach(local, remote, localPort, remotePort)
-	case local.Is6() && remote.Is6():
+	case lv6 && rv6:
 		pkt = buildICMPv6Unreach(local, remote, localPort, remotePort)
 	default:
 		return
