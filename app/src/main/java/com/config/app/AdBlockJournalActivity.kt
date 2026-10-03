@@ -45,7 +45,7 @@ class AdBlockJournalActivity : AppCompatActivity() {
             sb.append("capturedAt=").append(java.util.Date()).append("\n")
             sb.append("vpnStatus=").append(VpnManager.globalStatus).append("\n")
             sb.append("datapathActive=").append(UnifiedVpnService.active).append("\n")
-            sb.append("adblock_enabled=").append(prefs.getBoolean("adblock_enabled", true)).append("\n")
+            sb.append("adblock_enabled=").append(prefs.getBoolean("adblock_enabled", false)).append("\n")
             sb.append("UnifiedAdBlock.running=").append(UnifiedAdBlock.running).append("\n")
             sb.append("UnifiedAdBlock.ready=").append(UnifiedAdBlock.ready).append("\n")
             sb.append("UnifiedAdBlock.SOURCE=").append(UnifiedAdBlock.SOURCE).append("\n")

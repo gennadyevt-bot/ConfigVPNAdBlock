@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
@@ -402,7 +401,6 @@ var (
 	t443seen   int64
 	quicRelays int64
 	quicDrops  int64
-	quicPassCount int64
 	quicPass   int64
 	udpSeen    int64
 	tcp4N      int64
@@ -1039,24 +1037,6 @@ func SetContentFilter(on bool) {
 }
 
 func contentFilterEnabled() bool { return atomic.LoadInt64(&contentFilterOn) == 1 }
-
-// quicPassOn: режим App VPN (include) — QUIC/443 НЕ дропаем, а пускаем
-// через обычный UDP-релей туннеля. Причина: Cronet (YouTube) не откатывается
-// на TCP ни через чёрную дыну, ни через ICMP, ни через forged VN — сидит на
-// QUIC бесконечно, приложение не грузится. YouTube pinned и нефильтруем,
-// поэтому пропуск его QUIC ничего не теряет для блокировки рекламы.
-var quicPassOn int64
-
-// SetQuicPass переключает пропуск QUIC (вызывается из Kotlin).
-func SetQuicPass(on bool) {
-	if on {
-		atomic.StoreInt64(&quicPassOn, 1)
-	} else {
-		atomic.StoreInt64(&quicPassOn, 0)
-	}
-}
-
-func quicPassEnabled() bool { return atomic.LoadInt64(&quicPassOn) == 1 }
 
 // --- DNS_ALLOW 0.5.79 (GPT, диагностика): последние 100-150 УНИКАЛЬНЫХ
 // разрешённых доменов. Очищается при каждом запуске VPN. Блокировки нет.
@@ -1901,18 +1881,7 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	// не взлетел (QUIC_RELAY total=1 за полторы минуты), стало хуже.
 	// Возврат к рабочей базе (working-baseline-20261001): дроп QUIC ->
 	// форсинг TCP -> SNI-блок/MITM. Скорость Google - компромисс архитектуры.
-	if id.LocalPort == 443 && quicPassEnabled() {
-		// alpha58: режим App VPN — QUIC пропускаем в общий UDP-релей без
-		// дропа. Причина: Cronet (YouTube) не откатывается на TCP ни через
-		// чёрную дыну, ни через ICMP, ни через forged VN — сидит на QUIC
-		// бесконечно, приложение не грузится. YouTube pinned и нефильтруем,
-		// пропуск его QUIC ничего не теряет для блокировки рекламы.
-		n := atomic.AddInt64(&quicPassCount, 1)
-		if n == 1 || n%64 == 0 {
-			flowLog(fmt.Sprintf("QUIC_PASS total=%d dst=%s", n, id.LocalAddress.String()))
-		}
-		// проваливаемся в общий UDP-релей ниже
-	} else if id.LocalPort == 443 {
+	if id.LocalPort == 443 {
 		// alpha48: ОТКАТ селективного QUIC (alpha46/47). Пропуск UDP/443
 		// через gVisor->WG UDP-relay дал регрессии (alpha46 — чёрная дыра
 		// для кэшированных IP Chrome; alpha47 — пропуск всех неизвестных
@@ -1925,40 +1894,8 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		if n == 1 || n%64 == 0 {
 			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
 		}
-		// alpha57: Cronet НЕ откатывался на TCP ни через чёрную дыну,
-		// ни через мусор, ни через ICMP unreachable (40 дропов / 2.5 мин,
-		// t443Seen=0). Отвечаем поддельным QUIC Version Negotiation:
-		// клиент не находит совместимой версии -> handshake падает мгновенно
-		// -> TCP. VN — открытый пакет, криптография не нужна.
-		if d, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
-			d.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
-		}
-		buf := make([]byte, 1600)
-		m, rerr := conn.Read(buf)
-		if rerr == nil {
-			if vn := buildQUICVN(buf[:m]); vn != nil {
-				udp := make([]byte, 8+len(vn))
-				binary.BigEndian.PutUint16(udp[0:2], id.LocalPort)
-				binary.BigEndian.PutUint16(udp[2:4], id.RemotePort)
-				binary.BigEndian.PutUint16(udp[4:6], uint16(len(udp)))
-				copy(udp[8:], vn)
-				if strings.Contains(id.RemoteAddress.String(), ":") {
-					binary.BigEndian.PutUint16(udp[6:8], udp6Checksum(udp, id.LocalAddress, id.RemoteAddress))
-				}
-				_, _ = conn.Write(udp)
-				if n == 1 {
-					flowLog("QUIC_VN version-negotiation fallback trigger on")
-				}
-			}
-		}
-		quicICMPUnreach(id.LocalPort, id.LocalAddress, id.RemoteAddress, id.RemotePort)
 		return
 	}
-
-
-
-// quicICMPUnreach строит и пишет в TUN ICMP Destination Unreachable
-// (port unreachable) «от сервера» приложению, чей QUIC-пакет мы дропнули.
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
 	if id.LocalAddress.String() == dzenFakeIP {
 		flowLog("QUIC_FAKEIP_DROP dst=" + id.LocalAddress.String())
@@ -1972,19 +1909,13 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 	up, err := dialUDP(dst)
 	if err != nil {
-		// alpha60: инструментация QUIC-pass релея — где именно рвётся тракт.
-		flowLog("UDP_RELAY_ATTACH_FAIL dst=" + dst + " err=" + err.Error())
 		return
 	}
 	defer up.Close()
 	if _, err := up.Write(buf[:n]); err != nil {
-		flowLog("UDP_RELAY_WRITE_FAIL dst=" + dst + " err=" + err.Error())
 		return
 	}
 	atomic.AddInt64(&quicRelays, 1)
-	if id.LocalPort == 443 {
-		flowLog(fmt.Sprintf("UDP_RELAY_QUIC_ATTACHED dst=%s first=%dB", dst, n))
-	}
 
 	go func() {
 		cbuf := make([]byte, 64*1024)
@@ -2000,211 +1931,14 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}()
 
 	rbuf := make([]byte, 64*1024)
-	firstReply := true
 	for {
 		_ = up.SetReadDeadline(time.Now().Add(60 * time.Second))
 		rn, rerr := up.Read(rbuf)
 		if rerr != nil || rn <= 0 {
-			if id.LocalPort == 443 {
-				flowLog("UDP_RELAY_QUIC_REPLY_END dst=" + dst + " err=" + mapErr(rerr))
-			}
 			return
-		}
-		if firstReply && id.LocalPort == 443 {
-			firstReply = false
-			flowLog(fmt.Sprintf("UDP_RELAY_QUIC_FIRST_REPLY dst=%s n=%dB", dst, rn))
 		}
 		if _, werr := conn.Write(rbuf[:rn]); werr != nil {
 			return
 		}
 	}
-}
-
-func mapErr(e error) string {
-	if e == nil {
-		return "eof"
-	}
-	return e.Error()
-}
-func quicICMPUnreach(localPort uint16, local, remote tcpip.Address, remotePort uint16) {
-	stackMu.Lock()
-	f := stackFile
-	stackMu.Unlock()
-	if f == nil {
-		return
-	}
-	var pkt []byte
-	lv6, rv6 := strings.Contains(local.String(), ":"), strings.Contains(remote.String(), ":")
-	switch {
-	case !lv6 && !rv6:
-		pkt = buildICMPv4Unreach(local, remote, localPort, remotePort)
-	case lv6 && rv6:
-		pkt = buildICMPv6Unreach(local, remote, localPort, remotePort)
-	default:
-		return
-	}
-	if len(pkt) == 0 {
-		return
-	}
-	if _, err := f.Write(pkt); err != nil && atomic.LoadInt64(&quicDrops) == 1 {
-		flowLog("ICMP_UNREACH write err: " + err.Error())
-	}
-}
-
-func csum16(b []byte) uint16 {
-	sum := uint32(0)
-	for i := 0; i+1 < len(b); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(b[i:]))
-	}
-	if len(b)%2 == 1 {
-		sum += uint32(b[len(b)-1]) << 8
-	}
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
-}
-
-// buildICMPv4Unreach: внешний IPv4 (src=сервер, dst=приложение) + ICMPv4
-// type 3/code 3 + вложенный «оригинальный» пакет приложения (UDP к :443).
-func buildICMPv4Unreach(server, app tcpip.Address, serverPort, appPort uint16) []byte {
-	srv := server.As4()
-	cl := app.As4()
-	orig := make([]byte, 20+8)
-	orig[0] = 0x45
-	binary.BigEndian.PutUint16(orig[2:4], uint16(len(orig)))
-	orig[8] = 64
-	orig[9] = 17 // UDP
-	copy(orig[12:16], cl[:])
-	copy(orig[16:20], srv[:])
-	binary.BigEndian.PutUint16(orig[10:12], csum16(orig[:20]))
-	binary.BigEndian.PutUint16(orig[20:22], appPort)
-	binary.BigEndian.PutUint16(orig[22:24], serverPort)
-	binary.BigEndian.PutUint16(orig[24:26], 8)
-
-	icmpLen := 8 + len(orig)
-	pkt := make([]byte, 20+icmpLen)
-	ip := pkt[:20]
-	ip[0] = 0x45
-	binary.BigEndian.PutUint16(ip[2:4], uint16(len(pkt)))
-	ip[8] = 64
-	ip[9] = 1 // ICMP
-	copy(ip[12:16], srv[:])
-	copy(ip[16:20], cl[:])
-	binary.BigEndian.PutUint16(ip[10:12], csum16(ip))
-	icmp := pkt[20:]
-	icmp[0] = 3
-	icmp[1] = 3
-	copy(icmp[8:], orig)
-	binary.BigEndian.PutUint16(icmp[2:4], csum16(icmp))
-	return pkt
-}
-
-// buildICMPv6Unreach: ICMPv6 type 1/code 4 с pseudo-header-чексуммой.
-func buildICMPv6Unreach(server, app tcpip.Address, serverPort, appPort uint16) []byte {
-	srv := server.As16()
-	cl := app.As16()
-	orig := make([]byte, 40+8)
-	orig[0] = 0x60
-	binary.BigEndian.PutUint16(orig[4:6], uint16(len(orig)))
-	orig[6] = 17 // UDP
-	orig[7] = 64
-	copy(orig[8:24], cl[:])
-	copy(orig[24:40], srv[:])
-	binary.BigEndian.PutUint16(orig[40:42], appPort)
-	binary.BigEndian.PutUint16(orig[42:44], serverPort)
-	binary.BigEndian.PutUint16(orig[44:46], 8)
-
-	icmpLen := 8 + len(orig)
-	icmp := make([]byte, icmpLen)
-	icmp[0] = 1
-	icmp[1] = 4
-	copy(icmp[8:], orig)
-	// alpha56: исправлена чексумма (было двойное дополнение через csum16 -
-	// пакеты с невалидной суммой ядро молча дропало, и ICMPv6 до YouTube
-	// не доходил). Складываем СЫРЫЕ слова pseudo-header + icmp, инвертируем
-	// один раз в конце.
-	sum := uint32(icmpLen) + 58
-	for i := 0; i < 16; i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(srv[i:]))
-		sum += uint32(binary.BigEndian.Uint16(cl[i:]))
-	}
-	for i := 0; i+1 < len(icmp); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(icmp[i:]))
-	}
-	if len(icmp)%2 == 1 {
-		sum += uint32(icmp[len(icmp)-1]) << 8
-	}
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	c := ^uint16(sum)
-	icmp[2] = byte(c >> 8)
-	icmp[3] = byte(c)
-
-	pkt := make([]byte, 40+icmpLen)
-	ip6 := pkt[:40]
-	ip6[0] = 0x60
-	binary.BigEndian.PutUint16(ip6[4:6], uint16(icmpLen))
-	ip6[6] = 58
-	ip6[7] = 64
-	copy(ip6[8:24], srv[:])
-	copy(ip6[24:40], cl[:])
-	copy(pkt[40:], icmp)
-	return pkt
-}
-
-// buildQUICVN собирает QUIC Version Negotiation с несовместимыми версиями:
-// клиент завершает попытку с ошибкой "no compatible version" (RFC 9000 §5.2).
-func buildQUICVN(client []byte) []byte {
-	if len(client) < 7 || client[0]&0x80 == 0 {
-		return nil
-	}
-	if binary.BigEndian.Uint32(client[1:5]) == 0 {
-		return nil
-	}
-	dcidLen := int(client[5])
-	p := 6
-	if p+dcidLen+1 > len(client) {
-		return nil
-	}
-	scidLen := int(client[p+dcidLen])
-	scidStart := p + dcidLen + 1
-	if scidLen > 20 || scidStart+scidLen > len(client) {
-		return nil
-	}
-	clientSCID := client[scidStart : scidStart+scidLen]
-	scid := make([]byte, 8)
-	binary.LittleEndian.PutUint64(scid, uint64(time.Now().UnixNano()))
-	vn := make([]byte, 0, 7+scidLen+1+8+8)
-	vn = append(vn, 0xc0)
-	vn = append(vn, 0, 0, 0, 0)
-	vn = append(vn, byte(scidLen))
-	vn = append(vn, clientSCID...)
-	vn = append(vn, byte(len(scid)))
-	vn = append(vn, scid...)
-	vn = append(vn, 0xde, 0xad, 0x00, 0x01)
-	vn = append(vn, 0x1a, 0x2b, 0x3c, 0x4d)
-	return vn
-}
-
-// udp6Checksum: контрольная сумма UDP поверх IPv6 (обязательна).
-func udp6Checksum(udp []byte, src, dst tcpip.Address) uint16 {
-	s := src.As16()
-	d := dst.As16()
-	sum := uint32(len(udp)) + 17
-	for i := 0; i < 16; i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(s[i:]))
-		sum += uint32(binary.BigEndian.Uint16(d[i:]))
-	}
-	for i := 0; i+1 < len(udp); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(udp[i:]))
-	}
-	if len(udp)%2 == 1 {
-		sum += uint32(udp[len(udp)-1]) << 8
-	}
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
 }

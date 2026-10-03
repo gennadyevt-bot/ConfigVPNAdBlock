@@ -142,16 +142,8 @@ class AppVpnActivity : AppCompatActivity() {
             }
 
             if (enabled) {
-                // alpha59: возврат Smart App VPN — монитор снова запускается
-                // и управляет жизненным циклом; маршрутизация выбранных
-                // приложений по-прежнему через addAllowedApplication.
-                // connect() переподключает безусловно: при поднятом VPN
-                // применит новый список, при опущенном — поднимет туннель.
                 AppMonitorService.start(this)
-                // alpha66: при ВКЛЮЧЕНИИ режима App VPN подключаем туннель
-                // один раз (если ещё не подключён). Ручное отключение после
-                // этого монитор НЕ перебивает — кнопка у пользователя.
-                if (VpnManager.globalStatus == VpnStatus.DISCONNECTED || VpnManager.globalStatus == VpnStatus.ERROR) {
+                if (VpnManager.globalStatus == VpnStatus.DISCONNECTED) {
                     autoConnectVpn()
                 }
                 val modeText = if (isIncludeMode) "через VPN" else "обход VPN"
