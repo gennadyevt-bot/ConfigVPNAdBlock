@@ -58,7 +58,13 @@ class VpnManager private constructor(private val context: Context) {
         return VpnService.prepare(context) == null
     }
 
-    fun connect(server: ServerInfo) {
+    // alpha61: фактическое состояние AdBlock-тракта в текущем туннеле.
+    // Нужен монитору, чтобы не переподключаться без изменений состояния.
+    @Volatile
+    var lastTunnelAdblock: Boolean? = null
+        private set
+
+    fun connect(server: ServerInfo, adBlockOverride: Boolean? = null) {
         // БЕЗ guard'а от параллельных входов: он застревал после обрыва сессии
         // и молча глушил все повторные connect'ы (VPN не поднимался вообще).
         // Гонка запросов решается на уровне request_id в UnifiedVpnService.
@@ -136,7 +142,13 @@ class VpnManager private constructor(private val context: Context) {
         context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
         // AdBlock ON: Android TUN → фильтр → WG/AWG packet engine.
         // При ошибке фильтра подключение завершается с явной ошибкой.
-        if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", true)) {
+        // alpha61: adBlockOverride — режим App VPN переключает тракт:
+        // foreground-приложение из списка → простой путь (QUIC-приложения
+        // работают), остальные → AdBlock-тракт. null = читать pref.
+        val adblockActive = adBlockOverride
+            ?: context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", true)
+        lastTunnelAdblock = adblockActive
+        if (adblockActive) {
             val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server)
             if (adOk) {
                 dbg("ADBLOCK: ACTIVE")

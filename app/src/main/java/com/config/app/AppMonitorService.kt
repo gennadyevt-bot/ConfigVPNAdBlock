@@ -118,20 +118,68 @@ class AppMonitorService : Service() {
 
         android.util.Log.d("AppMonitor", "Should connect: $shouldConnect (fg=$foregroundApp)")
 
+        // alpha61: два мира вместо одного сломанного.
+        // Выбранное приложение на экране → ПРОСТОЙ тракт (adblock выкл на
+        // уровне туннеля — QUIC-приложения типа YouTube работают нативно).
+        // Остальные приложения → AdBlock-тракт (фильтрация всех остальных
+        // работает одновременно, VPN не падает).
         if (shouldConnect) {
             cancelPendingDisconnect()
-            if (VpnManager.globalStatus == VpnStatus.DISCONNECTED || VpnManager.globalStatus == VpnStatus.ERROR) {
-                android.util.Log.d("AppMonitor", "Auto-connecting for app: $foregroundApp")
+            if (VpnManager.globalStatus != VpnStatus.CONNECTED || VpnManager.lastTunnelAdblock != false) {
+                android.util.Log.d("AppMonitor", "Switch to PLAIN tunnel for app: $foregroundApp")
                 vpnTriggeredByAppMonitor = true
-                autoConnectVpn()
+                autoConnectVpn(adBlock = false)
             }
         } else {
-            // Отключаем не сразу, а через grace-период: быстрые переключения
-            // между приложениями не должны рвать VPN (реконнект ~30 сек).
-            if (vpnTriggeredByAppMonitor && VpnManager.globalStatus == VpnStatus.CONNECTED) {
-                scheduleDisconnect()
+            // Не выбранное приложение — вернуть AdBlock-тракт, НЕ отключая VPN.
+            // grace-период: быстрое переключение туда-обратно не дёргает туннель.
+            val needAdblockTunnel = VpnManager.globalStatus != VpnStatus.CONNECTED || VpnManager.lastTunnelAdblock != true
+            if (needAdblockTunnel && (vpnTriggeredByAppMonitor || VpnManager.globalStatus != VpnStatus.CONNECTED)) {
+                if (VpnManager.globalStatus == VpnStatus.CONNECTED) {
+                    // grace перед переключением, чтобы таск-свитч не молотил
+                    scheduleAdblockRestore()
+                } else {
+                    vpnTriggeredByAppMonitor = true
+                    autoConnectVpn(adBlock = true)
+                }
             }
         }
+    }
+
+    private var adblockRestorePending = false
+    private var adblockRestoreRunnable: Runnable? = null
+
+    private fun scheduleAdblockRestore() {
+        if (adblockRestorePending) return
+        adblockRestorePending = true
+        android.util.Log.d("AppMonitor", "Scheduling adblock-restore in 5s")
+        val r = Runnable {
+            adblockRestorePending = false
+            adblockRestoreRunnable = null
+            val storage = appVpnStorage
+            if (storage == null || !storage.isEnabled()) return@Runnable
+            if (VpnManager.globalStatus == VpnStatus.CONNECTED &&
+                VpnManager.lastTunnelAdblock == false
+            ) {
+                // Убедимся, что выбранное приложение не вернулось на экран
+                val fg = getForegroundApp() ?: return@Runnable
+                val sel = storage.getSelectedPackages()
+                val exc = storage.getExcludedPackages()
+                val shouldPlain = if (sel.isNotEmpty()) sel.contains(fg) else if (exc.isNotEmpty()) exc.contains(fg) else false
+                if (shouldPlain) return@Runnable
+                vpnTriggeredByAppMonitor = true
+                android.util.Log.d("AppMonitor", "Restoring AdBlock tunnel")
+                autoConnectVpn(adBlock = true)
+            }
+        }
+        adblockRestoreRunnable = r
+        handler.postDelayed(r, 5000)
+    }
+
+    private fun cancelPendingAdblockRestore() {
+        adblockRestoreRunnable?.let { handler.removeCallbacks(it) }
+        adblockRestoreRunnable = null
+        adblockRestorePending = false
     }
 
     private fun scheduleDisconnect() {
@@ -222,7 +270,7 @@ class AppMonitorService : Service() {
 
     // ==================== VPN ACTIONS ====================
 
-    private fun autoConnectVpn() {
+    private fun autoConnectVpn(adBlock: Boolean? = null) {
         val servers = EmbeddedServers.all(this)
         val serverId = AppVpnStorage(this).getServerId()
         // Сначала конфиг, выбранный в App VPN, иначе первый валидный
@@ -236,7 +284,7 @@ class AppMonitorService : Service() {
                 try {
                     android.util.Log.d("AppMonitor", "Auto-connecting to ${server.name}...")
                     val vpnManager = VpnManager.getInstance(this@AppMonitorService)
-                    vpnManager.connect(server)
+                    vpnManager.connect(server, adBlockOverride = adBlock)
                     Handler(Looper.getMainLooper()).post {
                         Toast.makeText(this@AppMonitorService, "VPN автоматически включён", Toast.LENGTH_SHORT).show()
                     }
