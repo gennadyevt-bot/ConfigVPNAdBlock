@@ -86,7 +86,7 @@ object UnifiedAdBlock {
                 // alpha58: в режиме App VPN (include) QUIC не дропаем,
                 // а пропускаем через туннель — Cronet (YouTube) не
                 // откатывается на TCP никак, а YouTube нефильтруем.
-                val appVpn = AppVpnStorage(this)
+                val appVpn = AppVpnStorage(vpn)
                 mitm.Mitm.setQuicPass(appVpn.isEnabled() && (appVpn.getSelectedPackages().isNotEmpty() || appVpn.getExcludedPackages().isNotEmpty()))
 
                 ready = true
