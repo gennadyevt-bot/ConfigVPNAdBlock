@@ -148,7 +148,9 @@ class AppVpnActivity : AppCompatActivity() {
                 // connect() переподключает безусловно: при поднятом VPN
                 // применит новый список, при опущенном — поднимет туннель.
                 AppMonitorService.start(this)
-                autoConnectVpn()
+                // alpha65: НЕ подключаем VPN автоматически — только кнопкой
+                // на главном экране. Монитор лишь переключает тракт AdBlock
+                // при уже поднятом туннеле.
                 val modeText = if (isIncludeMode) "через VPN" else "обход VPN"
                 Toast.makeText(this, "Сохранено: ${selectedPackages.size} приложений ($modeText)", Toast.LENGTH_SHORT).show()
             } else {

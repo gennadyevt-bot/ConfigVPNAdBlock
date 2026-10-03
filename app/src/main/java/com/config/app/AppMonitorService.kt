@@ -118,30 +118,28 @@ class AppMonitorService : Service() {
 
         android.util.Log.d("AppMonitor", "Should connect: $shouldConnect (fg=$foregroundApp)")
 
-        // alpha61: два мира вместо одного сломанного.
-        // Выбранное приложение на экране → ПРОСТОЙ тракт (adblock выкл на
-        // уровне туннеля — QUIC-приложения типа YouTube работают нативно).
-        // Остальные приложения → AdBlock-тракт (фильтрация всех остальных
-        // работает одновременно, VPN не падает).
+        // alpha65: жизненным циклом VPN управляет ТОЛЬКО пользователь.
+        // Монитор никогда не подключает туннель сам (это ломало ручное
+        // отключение: VPN сам включался обратно). Монитор лишь ПЕРЕКЛЮЧАЕТ
+        // тракт (AdBlock вкл/выкл) при уже поднятом туннеле:
+        // выбранное приложение на экране → простой тракт (QUIC-приложения
+        // работают нативно), остальное → AdBlock-тракт.
+        if (VpnManager.globalStatus != VpnStatus.CONNECTED) {
+            cancelPendingAdblockRestore()
+            return
+        }
         if (shouldConnect) {
             cancelPendingDisconnect()
-            if (VpnManager.globalStatus != VpnStatus.CONNECTED || VpnManager.lastTunnelAdblock != false) {
+            cancelPendingAdblockRestore()
+            if (VpnManager.lastTunnelAdblock != false) {
                 android.util.Log.d("AppMonitor", "Switch to PLAIN tunnel for app: $foregroundApp")
                 vpnTriggeredByAppMonitor = true
                 autoConnectVpn(adBlock = false)
             }
         } else {
-            // Не выбранное приложение — вернуть AdBlock-тракт, НЕ отключая VPN.
-            // grace-период: быстрое переключение туда-обратно не дёргает туннель.
-            val needAdblockTunnel = VpnManager.globalStatus != VpnStatus.CONNECTED || VpnManager.lastTunnelAdblock != true
-            if (needAdblockTunnel && (vpnTriggeredByAppMonitor || VpnManager.globalStatus != VpnStatus.CONNECTED)) {
-                if (VpnManager.globalStatus == VpnStatus.CONNECTED) {
-                    // grace перед переключением, чтобы таск-свитч не молотил
-                    scheduleAdblockRestore()
-                } else {
-                    vpnTriggeredByAppMonitor = true
-                    autoConnectVpn(adBlock = true)
-                }
+            // Вернуть AdBlock-тракт через grace-период (5 с), не отключая VPN.
+            if (VpnManager.lastTunnelAdblock == false) {
+                scheduleAdblockRestore()
             }
         }
     }
