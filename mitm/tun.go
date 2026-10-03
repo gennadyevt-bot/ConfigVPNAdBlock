@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
@@ -1894,17 +1895,134 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		if n == 1 || n%64 == 0 {
 			flowLog(fmt.Sprintf("QUIC_DROP total=%d dst=%s host=%s", n, id.LocalAddress.String(), host))
 		}
-		// alpha53: вместо молчаливого дропа шлём мусорный датаграмм
-		// клиенту. Тихая чёрная дына заставляла приложения (YouTube/Cronet)
-		// бесконечно ретранслировать QUIC Initial и НЕ откатываться на TCP
-		// (App VPN + AdBlock: t443Seen=0 за 28+ сек). Мусор сразу фейлит
-		// QUIC-handshake -> клиент уходит в TCP за секунды, в обоих режимах.
-		if n == 1 {
-			flowLog("QUIC_RST garbage-datagram fallback trigger on")
-		}
-		_, _ = conn.Write([]byte{0x00})
+		// alpha55: QUIC-клиенты терпят мусор, но чтут ICMP port-unreachable:
+		// Cronet/Chrome получают его -> мгновенный откат на TCP. Пакет пишем
+		// напрямую в TUN-fd (stackFile): запись туда доставляет пакеты
+		// приложениям, минуя gVisor-буферы. Без этого App VPN + AdBlock
+		// держал YouTube на бесконечном QUIC-ретрансмите (t443Seen=0).
+		quicICMPUnreach(id.LocalPort, id.LocalAddress, id.RemoteAddress, id.RemotePort)
 		return
 	}
+
+// quicICMPUnreach строит и пишет в TUN ICMP Destination Unreachable
+// (port unreachable) «от сервера» приложению, чей QUIC-пакет мы дропнули.
+func quicICMPUnreach(localPort uint16, local, remote tcpip.Address, remotePort uint16) {
+	stackMu.RLock()
+	f := stackFile
+	stackMu.RUnlock()
+	if f == nil {
+		return
+	}
+	var pkt []byte
+	switch {
+	case id.LocalAddress.Is4() && id.RemoteAddress.Is4():
+		pkt = buildICMPv4Unreach(id.LocalAddress, id.RemoteAddress, id.LocalPort, id.RemotePort)
+	case id.LocalAddress.Is6() && id.RemoteAddress.Is6():
+		pkt = buildICMPv6Unreach(id.LocalAddress, id.RemoteAddress, id.LocalPort, id.RemotePort)
+	default:
+		return
+	}
+	if len(pkt) == 0 {
+		return
+	}
+	if _, err := f.Write(pkt); err != nil && atomic.LoadInt64(&quicDrops) == 1 {
+		flowLog("ICMP_UNREACH write err: " + err.Error())
+	}
+}
+
+func csum16(b []byte) uint16 {
+	sum := uint32(0)
+	for i := 0; i+1 < len(b); i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(b[i:]))
+	}
+	if len(b)%2 == 1 {
+		sum += uint32(b[len(b)-1]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	return ^uint16(sum)
+}
+
+// buildICMPv4Unreach: внешний IPv4 (src=сервер, dst=приложение) + ICMPv4
+// type 3/code 3 + вложенный «оригинальный» пакет приложения (UDP к :443).
+func buildICMPv4Unreach(server, app tcpip.Address, serverPort, appPort uint16) []byte {
+	srv := server.As4()
+	cl := app.As4()
+	orig := make([]byte, 20+8)
+	orig[0] = 0x45
+	binary.BigEndian.PutUint16(orig[2:4], uint16(len(orig)))
+	orig[8] = 64
+	orig[9] = 17 // UDP
+	copy(orig[12:16], cl[:])
+	copy(orig[16:20], srv[:])
+	binary.BigEndian.PutUint16(orig[10:12], csum16(orig[:20]))
+	binary.BigEndian.PutUint16(orig[20:22], appPort)
+	binary.BigEndian.PutUint16(orig[22:24], serverPort)
+	binary.BigEndian.PutUint16(orig[24:26], 8)
+
+	icmpLen := 8 + len(orig)
+	pkt := make([]byte, 20+icmpLen)
+	ip := pkt[:20]
+	ip[0] = 0x45
+	binary.BigEndian.PutUint16(ip[2:4], uint16(len(pkt)))
+	ip[8] = 64
+	ip[9] = 1 // ICMP
+	copy(ip[12:16], srv[:])
+	copy(ip[16:20], cl[:])
+	binary.BigEndian.PutUint16(ip[10:12], csum16(ip))
+	icmp := pkt[20:]
+	icmp[0] = 3
+	icmp[1] = 3
+	copy(icmp[8:], orig)
+	binary.BigEndian.PutUint16(icmp[2:4], csum16(icmp))
+	return pkt
+}
+
+// buildICMPv6Unreach: ICMPv6 type 1/code 4 с pseudo-header-чексуммой.
+func buildICMPv6Unreach(server, app tcpip.Address, serverPort, appPort uint16) []byte {
+	srv := server.As16()
+	cl := app.As16()
+	orig := make([]byte, 40+8)
+	orig[0] = 0x60
+	binary.BigEndian.PutUint16(orig[4:6], uint16(len(orig)))
+	orig[6] = 17 // UDP
+	orig[7] = 64
+	copy(orig[8:24], cl[:])
+	copy(orig[24:40], srv[:])
+	binary.BigEndian.PutUint16(orig[40:42], appPort)
+	binary.BigEndian.PutUint16(orig[42:44], serverPort)
+	binary.BigEndian.PutUint16(orig[44:46], 8)
+
+	icmpLen := 8 + len(orig)
+	icmp := make([]byte, icmpLen)
+	icmp[0] = 1
+	icmp[1] = 4
+	copy(icmp[8:], orig)
+	sum := uint32(icmpLen) + 58
+	for i := 0; i < 16; i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(srv[i:]))
+		sum += uint32(binary.BigEndian.Uint16(cl[i:]))
+	}
+	sum += uint32(csum16(icmp))
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	c := ^uint16(sum)
+	icmp[2] = byte(c >> 8)
+	icmp[3] = byte(c)
+
+	pkt := make([]byte, 40+icmpLen)
+	ip6 := pkt[:40]
+	ip6[0] = 0x60
+	binary.BigEndian.PutUint16(ip6[4:6], uint16(icmpLen))
+	ip6[6] = 58
+	ip6[7] = 64
+	copy(ip6[8:24], srv[:])
+	copy(ip6[24:40], cl[:])
+	copy(pkt[40:], icmp)
+	return pkt
+}
 	// QUIC-попытка к fake-IP dzen -> дроп (браузер откатится на TCP)
 	if id.LocalAddress.String() == dzenFakeIP {
 		flowLog("QUIC_FAKEIP_DROP dst=" + id.LocalAddress.String())
