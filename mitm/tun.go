@@ -2046,12 +2046,21 @@ func buildICMPv6Unreach(server, app tcpip.Address, serverPort, appPort uint16) [
 	icmp[0] = 1
 	icmp[1] = 4
 	copy(icmp[8:], orig)
+	// alpha56: исправлена чексумма (было двойное дополнение через csum16 -
+	// пакеты с невалидной суммой ядро молча дропало, и ICMPv6 до YouTube
+	// не доходил). Складываем СЫРЫЕ слова pseudo-header + icmp, инвертируем
+	// один раз в конце.
 	sum := uint32(icmpLen) + 58
 	for i := 0; i < 16; i += 2 {
 		sum += uint32(binary.BigEndian.Uint16(srv[i:]))
 		sum += uint32(binary.BigEndian.Uint16(cl[i:]))
 	}
-	sum += uint32(csum16(icmp))
+	for i := 0; i+1 < len(icmp); i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(icmp[i:]))
+	}
+	if len(icmp)%2 == 1 {
+		sum += uint32(icmp[len(icmp)-1]) << 8
+	}
 	for sum>>16 != 0 {
 		sum = (sum & 0xffff) + (sum >> 16)
 	}
