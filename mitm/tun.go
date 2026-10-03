@@ -1953,18 +1953,18 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}
 }
 func quicICMPUnreach(localPort uint16, local, remote tcpip.Address, remotePort uint16) {
-	stackMu.RLock()
+	stackMu.Lock()
 	f := stackFile
-	stackMu.RUnlock()
+	stackMu.Unlock()
 	if f == nil {
 		return
 	}
 	var pkt []byte
 	switch {
-	case id.LocalAddress.Is4() && id.RemoteAddress.Is4():
-		pkt = buildICMPv4Unreach(id.LocalAddress, id.RemoteAddress, id.LocalPort, id.RemotePort)
-	case id.LocalAddress.Is6() && id.RemoteAddress.Is6():
-		pkt = buildICMPv6Unreach(id.LocalAddress, id.RemoteAddress, id.LocalPort, id.RemotePort)
+	case local.Is4() && remote.Is4():
+		pkt = buildICMPv4Unreach(local, remote, localPort, remotePort)
+	case local.Is6() && remote.Is6():
+		pkt = buildICMPv6Unreach(local, remote, localPort, remotePort)
 	default:
 		return
 	}
