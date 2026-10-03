@@ -58,12 +58,6 @@ class VpnManager private constructor(private val context: Context) {
         return VpnService.prepare(context) == null
     }
 
-    // alpha61: фактическое состояние AdBlock-тракта в текущем туннеле.
-    // Нужен монитору, чтобы не переподключаться без изменений состояния.
-    @Volatile
-    var lastTunnelAdblock: Boolean? = null
-        private set
-
     fun connect(server: ServerInfo, adBlockOverride: Boolean? = null) {
         // БЕЗ guard'а от параллельных входов: он застревал после обрыва сессии
         // и молча глушил все повторные connect'ы (VPN не поднимался вообще).
@@ -329,6 +323,11 @@ class VpnManager private constructor(private val context: Context) {
 
     companion object {
         var globalStatus: VpnStatus = VpnStatus.DISCONNECTED
+
+        // alpha61: фактическое состояние AdBlock-тракта в текущем туннеле.
+        // Нужен монитору, чтобы не переподключаться без изменений состояния.
+        @Volatile
+        var lastTunnelAdblock: Boolean? = null
 
         @Volatile
         private var instance: VpnManager? = null
