@@ -1,5 +1,6 @@
 package com.config.app
 
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
