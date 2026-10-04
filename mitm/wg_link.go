@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"configadblock/mitm/internal/quicfast"
 	"configadblock/mitm/internal/transportdiag"
 	"context"
 	"errors"
@@ -24,6 +25,8 @@ type wgLink struct {
 	once, closeOnce sync.Once
 	wg              sync.WaitGroup
 	cancel          context.CancelFunc
+	rawMu           sync.RWMutex
+	raw             *quicfast.Router
 }
 
 func newWgLink(f *os.File, mtu uint32, c *wgPacketCounter, d *transportdiag.Trace) *wgLink {
@@ -74,6 +77,12 @@ func (e *wgLink) rx() {
 			return
 		}
 		e.counts.rx.Add(1)
+		e.rawMu.RLock()
+		raw := e.raw
+		e.rawMu.RUnlock()
+		if raw != nil && raw.Inbound(scratch[:n]) {
+			continue
+		}
 		data := append([]byte(nil), scratch[:n]...)
 		var proto tcpip.NetworkProtocolNumber
 		switch header.IPVersion(data) {
@@ -129,8 +138,22 @@ func (e *wgLink) Close() {
 		if e.cancel != nil {
 			e.cancel()
 		}
+		e.rawMu.RLock()
+		raw := e.raw
+		e.rawMu.RUnlock()
+		if raw != nil {
+			raw.Stop()
+		}
 		e.f.Close()
 		e.Endpoint.Close()
 	})
 }
-func (e *wgLink) Wait() { e.wg.Wait() }
+func (e *wgLink) Wait() {
+	e.wg.Wait()
+	e.rawMu.RLock()
+	raw := e.raw
+	e.rawMu.RUnlock()
+	if raw != nil {
+		raw.Wait()
+	}
+}

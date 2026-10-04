@@ -59,7 +59,14 @@ func WgUpstreamStats() string {
 	if wgUpstream == nil {
 		return "upstream: stopped"
 	}
-	return fmt.Sprintf("upstream tx=%d rx=%d %s registeredEndpoints=%d cleanupEndpoints=%d tcpChecksumErrors=%d tcpInvalidSegments=%d\nWG_DIAL_FAIL %s", wgUpstream.counts.tx.Load(), wgUpstream.counts.rx.Load(), wgUpstream.trace.Stats()+" "+wgUpstream.trace.IOStatus(), len(wgUpstream.st.RegisteredEndpoints()), len(wgUpstream.st.CleanupEndpoints()), wgUpstream.st.Stats().TCP.ChecksumErrors.Value(), wgUpstream.st.Stats().TCP.InvalidSegmentsReceived.Value(), wgUpstream.trace.Failures())
+	rawStats := ""
+	wgUpstream.link.rawMu.RLock()
+	raw := wgUpstream.link.raw
+	wgUpstream.link.rawMu.RUnlock()
+	if raw != nil {
+		rawStats = raw.Stats() + " "
+	}
+	return rawStats + fmt.Sprintf("upstream tx=%d rx=%d %s registeredEndpoints=%d cleanupEndpoints=%d tcpChecksumErrors=%d tcpInvalidSegments=%d\nWG_DIAL_FAIL %s", wgUpstream.counts.tx.Load(), wgUpstream.counts.rx.Load(), wgUpstream.trace.Stats()+" "+wgUpstream.trace.IOStatus(), len(wgUpstream.st.RegisteredEndpoints()), len(wgUpstream.st.CleanupEndpoints()), wgUpstream.st.Stats().TCP.ChecksumErrors.Value(), wgUpstream.st.Stats().TCP.InvalidSegmentsReceived.Value(), wgUpstream.trace.Failures())
 }
 
 func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) error {
@@ -147,7 +154,7 @@ func startWgUpstream(fd int64, mtu int64, localIP string, dnsServer string) erro
 	})
 	wgUpstream = &wgUpstreamStack{st: st, local: localIP, dns: dnsServer, f: f, counts: counts, link: ep, trace: trace}
 	success = true
-	startQuicAdResolver()
+	// Raw QUIC policy uses authenticated SNI; the old IP resolver is unused.
 	flowLog("WG_UPSTREAM_START local=" + localIP)
 	flowLog("UNIFIED_WG_UPSTREAM_READY local=" + localIP)
 	return nil

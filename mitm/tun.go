@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"bufio"
+	"configadblock/mitm/internal/quicfast"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -37,10 +38,11 @@ import (
 // UDP 53 (DNS) -> прямой ретранслятор в 8.8.8.8. Engine-пакет не используем:
 // его UDP-путь через прокси молча глушил DNS (интернет умирал целиком).
 var (
-	stackMu   sync.Mutex
-	stackInst *stack.Stack
-	stackDev  stack.LinkEndpoint
-	stackFile *os.File
+	stackMu      sync.Mutex
+	stackInst    *stack.Stack
+	stackDev     stack.LinkEndpoint
+	stackFile    *os.File
+	stackCounter *tunCounter
 
 	direct443 int64
 )
@@ -207,17 +209,26 @@ var (
 // tunCounter считает пакеты/байты на TUN fd и разбирает IP-заголовок
 // первых ~20 пакетов сессии (без payload).
 type tunCounter struct {
-	f *os.File
+	f    *os.File
+	fast *quicfast.Router
 }
 
 func (c *tunCounter) Read(p []byte) (int, error) {
-	n, err := c.f.Read(p)
-	if n > 0 {
-		atomic.AddInt64(&tunRxPkts, 1)
-		atomic.AddInt64(&tunRxBytes, int64(n))
-		analyzeTunPkt(p[:n])
+	for {
+		n, err := c.f.Read(p)
+		if n > 0 {
+			atomic.AddInt64(&tunRxPkts, 1)
+			atomic.AddInt64(&tunRxBytes, int64(n))
+			analyzeTunPkt(p[:n])
+			if c.fast != nil && c.fast.Outbound(p[:n]) {
+				if err != nil {
+					return 0, err
+				}
+				continue
+			}
+		}
+		return n, err
 	}
-	return n, err
 }
 
 func (c *tunCounter) Write(p []byte) (int, error) {
@@ -314,7 +325,15 @@ func StartTunnel(fd int64, mtu int64) error {
 		return err
 	}
 	f := os.NewFile(uintptr(fd), "tun")
-	dev, err := iobased.New(&tunCounter{f: f}, uint32(mtu), 0)
+	counter := &tunCounter{f: f}
+	attachQuicFastPath(counter)
+	started := false
+	defer func() {
+		if !started && counter.fast != nil {
+			counter.fast.Stop()
+		}
+	}()
+	dev, err := iobased.New(counter, uint32(mtu), 0)
 	if err != nil {
 		f.Close()
 		return err
@@ -332,7 +351,9 @@ func StartTunnel(fd int64, mtu int64) error {
 	stackInst = st
 	stackDev = dev
 	stackFile = f
+	stackCounter = counter
 	stackMu.Unlock()
+	started = true
 	return nil
 }
 
@@ -361,6 +382,10 @@ func StackStats() string {
 func StopTunnel() {
 	stackMu.Lock()
 	defer stackMu.Unlock()
+	if stackCounter != nil && stackCounter.fast != nil {
+		stackCounter.fast.Stop()
+	}
+	stackCounter = nil
 	// iobased.Endpoint.Close does not close its io.ReadWriter.
 	if stackFile != nil {
 		stackFile.Close()
@@ -415,7 +440,7 @@ var (
 // браузера логируется построчно, UDP/443 роняем для отката на TCP).
 func UdpSeen() int64   { return atomic.LoadInt64(&udpSeen) }
 func QuicDrops() int64 { return atomic.LoadInt64(&quicDrops) }
-func QuicPass() int64 { return atomic.LoadInt64(&quicPass) }
+func QuicPass() int64  { return atomic.LoadInt64(&quicPass) }
 
 func T443Seen() int64   { return atomic.LoadInt64(&t443seen) }
 func QuicRelays() int64 { return atomic.LoadInt64(&quicRelays) }
@@ -1873,22 +1898,10 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		flowLog(fmt.Sprintf("udp dst=%s:%d fam=%s", id.LocalAddress.String(), id.LocalPort, ufam))
 	}
 
-	// UDP/443 (QUIC/HTTP3): ПРОПУСКАЕМ через обычный duplex UDP-relay
-	// (как остальной UDP ниже). Дроп QUIC (форсинг TCP->MITM) ломал скорость
-	// Google/YouTube, а фильтрации не добавлял: их пиннинг всё равно не даёт
-	// MITM, SNI-блокировка и DNS-фильтр продолжают работать.
-	// Откат эксперимента QUIC-relay: через двойной userspace-стек QUIC
-	// не взлетел (QUIC_RELAY total=1 за полторы минуты), стало хуже.
-	// Возврат к рабочей базе (working-baseline-20261001): дроп QUIC ->
-	// форсинг TCP -> SNI-блок/MITM. Скорость Google - компромисс архитектуры.
+	// Selected authenticated QUIC flows are consumed by tunCounter before
+	// application gVisor. Never fall back to dialUDP for other UDP/443 flows:
+	// browser traffic must retain TCP MITM, and non-unified mode stays unchanged.
 	if id.LocalPort == 443 {
-		// alpha48: ОТКАТ селективного QUIC (alpha46/47). Пропуск UDP/443
-		// через gVisor->WG UDP-relay дал регрессии (alpha46 — чёрная дыра
-		// для кэшированных IP Chrome; alpha47 — пропуск всех неизвестных
-		// поломал весь трафик). QUIC-relay через двойной userspace-стек
-		// требует отдельной проверки, вслепую на пользователе не делаем.
-		// Возврат к рабочей базе: дроп QUIC -> форсинг TCP -> SNI-блок/MITM.
-		// Скорость Google/YouTube — известный компромисс этой архитектуры.
 		host, _ := dnsIPMapGet(id.LocalAddress.String())
 		n := atomic.AddInt64(&quicDrops, 1)
 		if n == 1 || n%64 == 0 {
