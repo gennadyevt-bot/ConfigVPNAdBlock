@@ -1636,18 +1636,80 @@ func dnsCacheGet(key string) ([]byte, bool) {
 	return v, ok
 }
 
-// dnsIPMap — обратная карта IP -> hostname из ответов нашего DNS-резолвера.
-// Нужна селективному QUIC-пропуску: решение "рубить/не рубить UDP/443"
-// принимается по хосту, а пакет приходит на IP.
-var dnsIPMap sync.Map
+// DNS knowledge is a fallback for unknown QUIC only. Track all fresh names on
+// shared CDN IPs: an ambiguous or expired association is not a block decision.
+var dnsIPMapMu sync.Mutex
+var dnsIPMap = map[string]map[string]time.Time{}
 
 func dnsIPMapGet(ip string) (string, bool) {
-	v, ok := dnsIPMap.Load(ip)
-	if !ok {
+	dnsIPMapMu.Lock()
+	defer dnsIPMapMu.Unlock()
+	names := dnsIPMap[ip]
+	now := time.Now()
+	for name, expiry := range names {
+		if !now.Before(expiry) {
+			delete(names, name)
+		}
+	}
+	if len(names) == 0 {
+		delete(dnsIPMap, ip)
 		return "", false
 	}
-	s, _ := v.(string)
-	return s, s != ""
+	if len(names) != 1 {
+		return "", false
+	}
+	for name := range names {
+		return name, name != ""
+	}
+	return "", false
+}
+
+func dnsIPMapPut(ip, name string, ttl uint32) {
+	if ttl == 0 {
+		dnsIPMapMu.Lock()
+		delete(dnsIPMap, ip)
+		dnsIPMapMu.Unlock()
+		return
+	}
+	if ttl > 600 {
+		ttl = 600
+	} // Conservative classification knowledge, not DNS caching.
+	now := time.Now()
+	expiry := now.Add(time.Duration(ttl) * time.Second)
+	dnsIPMapMu.Lock()
+	defer dnsIPMapMu.Unlock()
+	if len(dnsIPMap) >= 4096 {
+		for key, names := range dnsIPMap {
+			for n, t := range names {
+				if !now.Before(t) {
+					delete(names, n)
+				}
+			}
+			if len(names) == 0 {
+				delete(dnsIPMap, key)
+			}
+		}
+		if _, exists := dnsIPMap[ip]; !exists && len(dnsIPMap) >= 4096 {
+			return
+		}
+	}
+	names := dnsIPMap[ip]
+	if names == nil {
+		names = map[string]time.Time{}
+		dnsIPMap[ip] = names
+	}
+	for n, t := range names {
+		if !now.Before(t) {
+			delete(names, n)
+		}
+	}
+	if len(names) >= 16 {
+		if expiry.After(names[""]) {
+			names[""] = expiry
+		}
+		return
+	} // Too many aliases: remain unknown.
+	names[name] = expiry
 }
 
 // recordDNSAnswers заполняет обратную карту из ответа DNS (A/AAAA -> qname).
@@ -1670,12 +1732,13 @@ func recordDNSAnswers(query, ans []byte) {
 		}
 		typ := int(ans[off])<<8 | int(ans[off+1])
 		rdlen := int(ans[off+8])<<8 | int(ans[off+9])
+		ttl := binary.BigEndian.Uint32(ans[off+4 : off+8])
 		off += 10
 		if off+rdlen > len(ans) {
 			return
 		}
 		if (typ == 1 && rdlen == 4) || (typ == 28 && rdlen == 16) {
-			dnsIPMap.Store(net.IP(ans[off:off+rdlen]).String(), name)
+			dnsIPMapPut(net.IP(ans[off:off+rdlen]).String(), name, ttl)
 		}
 		off += rdlen
 	}
@@ -1898,9 +1961,9 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		flowLog(fmt.Sprintf("udp dst=%s:%d fam=%s", id.LocalAddress.String(), id.LocalPort, ufam))
 	}
 
-	// Selected authenticated QUIC flows are consumed by tunCounter before
-	// application gVisor. Never fall back to dialUDP for other UDP/443 flows:
-	// browser traffic must retain TCP MITM, and non-unified mode stays unchanged.
+	// Unified UDP/443 (known or unknown) is consumed by the raw packet path
+	// before application gVisor. This is only the legacy non-unified path or an
+	// unsupported IP packet, not a fallback on failed QUIC SNI classification.
 	if id.LocalPort == 443 {
 		host, _ := dnsIPMapGet(id.LocalAddress.String())
 		n := atomic.AddInt64(&quicDrops, 1)

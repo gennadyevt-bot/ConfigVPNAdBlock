@@ -1,10 +1,10 @@
 package quicfast
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/netip"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,13 +18,19 @@ type Config struct {
 	Reserve       func(bool) (Reservation, error)
 	Send, Deliver func([]byte) error
 	Blocked       func(string, string) bool
+	KnownHost     func(string) string
 	Log           func(string)
 }
 type flowKey struct{ client, server netip.AddrPort }
 type flow struct {
 	key             flowKey
 	hello           hello
-	held            [][]byte
+	connectionID    []byte
+	host            string
+	source          string
+	verdict         string
+	verdictHost     string
+	parseLogged     bool
 	binding         Reservation
 	last            time.Time
 	allowed, denied bool
@@ -39,17 +45,9 @@ type Router struct {
 	wg                                    sync.WaitGroup
 	tx, rx                                chan []byte
 	txN, rxN, dropN, queueDropN, ioErrors atomic.Uint64
+	blockN, knownN, unknownN, parseFailN  atomic.Uint64
 }
 
-func VideoHost(host string) bool {
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	for _, base := range []string{"youtube.com", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "ggpht.com", "youtubei.googleapis.com", "youtube.googleapis.com"} {
-		if host == base || strings.HasSuffix(host, "."+base) {
-			return true
-		}
-	}
-	return false
-}
 func New(c Config) *Router {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Router{cfg: c, flows: make(map[flowKey]*flow), reverse: make(map[flowKey]*flow), ctx: ctx, cancel: cancel, tx: make(chan []byte, 256), rx: make(chan []byte, 256)}
@@ -122,67 +120,118 @@ func (r *Router) Outbound(b []byte) bool {
 		r.flows[key] = f
 	}
 	f.last = time.Now()
+
 	payload := p.data[p.off+8:]
-	if f.denied {
+	freshConnection := false
+	if cid := initialConnectionID(payload); len(cid) > 0 && !bytes.Equal(cid, f.connectionID) {
+		// Port tuples can be reused after a blocked connection. Carry no stale SNI
+		// verdict into a new Initial, including an unsupported QUIC version.
+		f.connectionID = append([]byte(nil), cid...)
+		f.hello = hello{}
+		f.host = ""
+		f.source = ""
+		f.parseLogged = false
+		f.denied = false
+		freshConnection = true
+	}
+	// Classification answers only whether a hostname is blocked. Unknown,
+	// unsupported and incomplete QUIC must use the same raw packet path.
+	if freshConnection || (!f.allowed && !f.denied) || isInitial(payload) {
+		previousCID := append([]byte(nil), f.hello.cid...)
+		// Independently decode complete new ClientHellos even on reused tuples/CIDs;
+		// otherwise merge authenticated fragments into this connection's assembler.
+		candidate := hello{}
+		host, pending := candidate.inspect(payload)
+		if pending && len(candidate.cid) > 0 && bytes.Equal(candidate.cid, previousCID) {
+			merged := f.hello
+			mergedHost, mergedPending := merged.inspect(payload)
+			if mergedHost != "" || mergedPending {
+				f.hello = merged
+				host, pending = mergedHost, mergedPending
+			} else {
+				// Authenticated CRYPTO bytes changed on a reused CID. Start a new
+				// assembler instead of retaining an old SNI or rejecting the flow.
+				f.hello = candidate
+				f.host = ""
+				f.source = ""
+			}
+		} else {
+			f.hello = candidate
+		}
+		if len(f.hello.cid) > 0 && !bytes.Equal(f.hello.cid, previousCID) {
+			f.host = ""
+			f.source = ""
+			f.parseLogged = false
+		}
+		if host != "" {
+			f.host = host
+			f.source = "sni"
+		}
+		if host == "" && !pending && !f.parseLogged {
+			f.parseLogged = true
+			r.parseFailN.Add(1)
+			r.log(fmt.Sprintf("QUIC_FAST_PARSE_FAIL dst=%s client=%s fallback=raw_wg", p.dst, p.src))
+		}
+	}
+	if f.source == "dns" {
+		f.host = ""
+		f.source = ""
+	}
+	if f.host == "" && r.cfg.KnownHost != nil {
+		// Only fresh, unambiguous DNS associations may identify an unknown flow.
+		// Authenticated SNI always takes precedence over shared CDN IP history.
+		if host := r.cfg.KnownHost(p.dst.Addr().String()); host != "" {
+			f.host = host
+			f.source = "dns"
+		}
+	}
+	if r.cfg.Blocked != nil && r.cfg.Blocked(f.host, p.dst.Addr().String()) {
+		r.removeBinding(f)
+		f.allowed = false
+		f.denied = true
 		r.dropN.Add(1)
+		r.verdict(f, "QUIC_FAST_BLOCK")
 		return true
 	}
-	if f.allowed {
-		// Handshake long headers use the server's CID: they must keep the same
-		// mapping. Only a new/retransmitted client Initial is reclassified.
-		if isInitial(payload) {
-			host, pending := f.hello.inspect(payload)
-			if pending {
-				r.removeBinding(f)
-				f.allowed = false
-				f.held = append(f.held, append([]byte(nil), b...))
-				return true
-			}
-			if host == "" || !VideoHost(host) || (r.cfg.Blocked != nil && r.cfg.Blocked(host, p.dst.Addr().String())) {
-				r.removeBinding(f)
-				f.allowed = false
-				f.denied = true
-				r.dropN.Add(1)
-				r.log(fmt.Sprintf("QUIC_FAST_DENY_REUSED_FLOW dst=%s host=%q", p.dst, host))
-				return true
-			}
-		}
-		if f.allowed {
-			r.enqueue(r.tx, rewrite(p, f.binding.Port, true))
+	f.denied = false
+	if !f.allowed {
+		binding, err := r.cfg.Reserve(p.v6)
+		if err != nil {
+			// Resource/I/O failures are not a blocklist decision or a permanent denial.
+			r.dropN.Add(1)
+			r.log(fmt.Sprintf("QUIC_FAST_RESERVE_FAIL dst=%s err=%v", p.dst, err))
 			return true
 		}
+		f.binding = binding
+		f.allowed = true
+		r.reverse[flowKey{netip.AddrPortFrom(p.src.Addr(), binding.Port), p.dst}] = f
 	}
-	host, pending := f.hello.inspect(payload)
-	if pending && len(f.held) < 8 {
-		f.held = append(f.held, append([]byte(nil), b...))
-		return true
+	verdict := "QUIC_FAST_PASS_UNKNOWN"
+	if f.host != "" {
+		verdict = "QUIC_FAST_PASS_KNOWN"
 	}
-	if host == "" || !VideoHost(host) || (r.cfg.Blocked != nil && r.cfg.Blocked(host, p.dst.Addr().String())) {
-		f.denied = true
-		f.held = nil
-		r.dropN.Add(1)
-		r.log(fmt.Sprintf("QUIC_FAST_DENY dst=%s host=%q", p.dst, host))
-		return true
-	}
-	binding, err := r.cfg.Reserve(p.v6)
-	if err != nil {
-		f.denied = true
-		f.held = nil
-		r.dropN.Add(1)
-		r.log(fmt.Sprintf("QUIC_FAST_RESERVE_FAIL dst=%s err=%v", p.dst, err))
-		return true
-	}
-	f.binding = binding
-	f.allowed = true
-	r.reverse[flowKey{netip.AddrPortFrom(p.src.Addr(), binding.Port), p.dst}] = f
-	r.log(fmt.Sprintf("QUIC_FAST_OPEN dst=%s host=%s client=%s mapped_port=%d", p.dst, host, p.src, binding.Port))
-	for _, saved := range f.held {
-		sp, _ := parse(saved)
-		r.enqueue(r.tx, rewrite(sp, binding.Port, true))
-	}
-	f.held = nil
-	r.enqueue(r.tx, rewrite(p, binding.Port, true))
+	r.verdict(f, verdict)
+	r.enqueue(r.tx, rewrite(p, f.binding.Port, true))
+
 	return true
+}
+
+// Log once per decision/hostname transition, not for every video packet.
+func (r *Router) verdict(f *flow, verdict string) {
+	if f.verdict == verdict && f.verdictHost == f.host {
+		return
+	}
+	f.verdict = verdict
+	f.verdictHost = f.host
+	switch verdict {
+	case "QUIC_FAST_BLOCK":
+		r.blockN.Add(1)
+	case "QUIC_FAST_PASS_KNOWN":
+		r.knownN.Add(1)
+	case "QUIC_FAST_PASS_UNKNOWN":
+		r.unknownN.Add(1)
+	}
+	r.log(fmt.Sprintf("%s dst=%s host=%q source=%s client=%s mapped_port=%d", verdict, f.key.server, f.host, f.source, f.key.client, f.binding.Port))
 }
 
 // The sole WG RX loop calls Inbound; bounded queues keep TUN backpressure
@@ -255,5 +304,5 @@ func (r *Router) Stats() string {
 	r.mu.Lock()
 	n := len(r.reverse)
 	r.mu.Unlock()
-	return fmt.Sprintf("quicFastTx=%d quicFastRx=%d quicFastDenied=%d quicFastQueueDropped=%d quicFastIOErrors=%d quicFastActive=%d", r.txN.Load(), r.rxN.Load(), r.dropN.Load(), r.queueDropN.Load(), r.ioErrors.Load(), n)
+	return fmt.Sprintf("QUIC_FAST_BLOCK=%d QUIC_FAST_PASS_KNOWN=%d QUIC_FAST_PASS_UNKNOWN=%d QUIC_FAST_PARSE_FAIL=%d quicFastTx=%d quicFastRx=%d quicFastDropped=%d quicFastQueueDropped=%d quicFastIOErrors=%d quicFastActive=%d", r.blockN.Load(), r.knownN.Load(), r.unknownN.Load(), r.parseFailN.Load(), r.txN.Load(), r.rxN.Load(), r.dropN.Load(), r.queueDropN.Load(), r.ioErrors.Load(), n)
 }

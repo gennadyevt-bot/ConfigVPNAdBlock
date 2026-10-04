@@ -135,25 +135,30 @@ func TestFragmentedInitialAndPolicy(t *testing.T) {
 	r := New(Config{Reserve: func(bool) (Reservation, error) { return Reservation{Port: 49002, Close: func() {}}, nil }, Send: func(b []byte) error { tx <- b; return nil }, Deliver: func([]byte) error { return nil }, Blocked: func(host, ip string) bool { return host == "ads.googlevideo.com" }})
 	defer func() { r.Stop(); r.Wait() }()
 	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "fragment-0")))
-	if len(tx) != 0 {
-		t.Fatal("incomplete SNI bypassed policy")
+	first := read(t, tx)
+	if r.unknownN.Load() != 1 {
+		t.Fatal("incomplete Initial did not pass as unknown")
 	}
+	firstPacket, _ := parse(first)
 	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "fragment-1")))
-	read(t, tx)
-	read(t, tx)
+	second := read(t, tx)
+	secondPacket, _ := parse(second)
+	if firstPacket.src.Port() != secondPacket.src.Port() {
+		t.Fatal("fragment classification changed reply mapping")
+	}
 	for i, name := range []string{"google-v1", "google-v2", "blocked-v1"} {
 		r.Outbound(udpPacket(false, uint16(42001+i), 443, fixture(t, name)))
 	}
+	read(t, tx)
+	read(t, tx) // Chrome/Google v1 and v2 both use fast path.
 	r.mu.Lock()
 	for key, f := range r.flows {
-		if key.client.Port() != 42000 && !f.denied {
-			t.Fatal("browser/ad flow allowed")
+		wantDenied := key.client.Port() == 42003
+		if f.denied != wantDenied {
+			t.Errorf("client=%d blocked=%v want=%v", key.client.Port(), f.denied, wantDenied)
 		}
 	}
 	r.mu.Unlock()
-	if VideoHost("googlevideo.com.evil.example") || VideoHost("www.google.com") || !VideoHost("rr1.googlevideo.com") {
-		t.Fatal("hostname boundary")
-	}
 	if r.Outbound(udpPacket(false, 1234, 53, []byte("DNS"))) {
 		t.Fatal("DNS bypassed AdBlock")
 	}
@@ -221,16 +226,108 @@ func TestHandshakeCIDAndReusedTuple(t *testing.T) {
 	if !ok || p.src.Port() != 49004 || !bytes.Equal(sent[p.off+8:], handshake) {
 		t.Fatal("server CID changed mapping or discarded handshake")
 	}
-	// Even identical CID/UDP tuple must not authorize a different ClientHello.
+	// Reused tuple/CID with a different permitted SNI keeps the packet mapping.
 	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "google-v1")))
-	r.mu.Lock()
-	f := r.flows[flowKey{p.src, p.dst}]
-	for _, v := range r.flows {
-		f = v
+	google := read(t, tx)
+	gp, _ := parse(google)
+	if gp.src.Port() != 49004 {
+		t.Fatal("known hostname transition remapped flow")
 	}
-	denied := f.denied
-	r.mu.Unlock()
-	if !denied || len(tx) != 0 {
-		t.Fatal("new browser Initial inherited video bypass")
+	// A subsequently authenticated advertising domain is blocked on that tuple.
+	r.cfg.Blocked = func(host, ip string) bool { return host == "ads.googlevideo.com" }
+	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "blocked-v1")))
+	if r.blockN.Load() != 1 || r.Inbound(reply(google)) {
+		t.Fatal("blocked reused tuple kept reverse mapping")
+	}
+	// A later nonblocked Initial can reopen a previously blocked tuple.
+	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "google-v2")))
+	read(t, tx)
+	if r.knownN.Load() != 3 {
+		t.Fatal("blocked flow remained stuck after permitted Initial")
+	}
+}
+
+func TestUnknownQUICPassAndReverseMapping(t *testing.T) {
+	for _, v6 := range []bool{false, true} {
+		t.Run(map[bool]string{false: "IPv4", true: "IPv6"}[v6], func(t *testing.T) {
+			cases := [][]byte{{0x40, 1, 2, 3}, {0xc0, 0x12, 0x34, 0x56, 0x78, 0xff}, fixture(t, "youtube-v1")}
+			cases[2][len(cases[2])-1] ^= 1 // Valid IP checksum, unauthenticatable QUIC Initial.
+			tx, rx := make(chan []byte, 8), make(chan []byte, 8)
+			var ports atomic.Uint32
+			r := New(Config{Reserve: func(bool) (Reservation, error) {
+				return Reservation{Port: uint16(49010 + ports.Add(1)), Close: func() {}}, nil
+			}, Send: func(b []byte) error { tx <- b; return nil }, Deliver: func(b []byte) error { rx <- b; return nil }})
+			defer func() { r.Stop(); r.Wait() }()
+			for i, payload := range cases {
+				client := uint16(42100 + i)
+				r.Outbound(udpPacket(v6, client, 443, payload))
+				sent := read(t, tx)
+				sp, ok := parse(sent)
+				if !ok || !bytes.Equal(sent[sp.off+8:], payload) || !r.Inbound(reply(sent)) {
+					t.Fatal("unknown QUIC did not use raw path")
+				}
+				received := read(t, rx)
+				rp, ok := parse(received)
+				if !ok || rp.dst.Port() != client || !bytes.Equal(received[rp.off+8:], payload) {
+					t.Fatal("unknown QUIC reply misrouted")
+				}
+			}
+			if r.unknownN.Load() != 3 || r.parseFailN.Load() != 3 || r.blockN.Load() != 0 {
+				t.Fatal(r.Stats())
+			}
+			// Session stop still releases unknown-flow reservations and reply mappings.
+			r.Stop()
+			if !strings.Contains(r.Stats(), "quicFastActive=0") {
+				t.Fatal("unknown endpoints leaked")
+			}
+		})
+	}
+}
+func TestDNSFallbackAndLateBlockedSNI(t *testing.T) {
+	tx := make(chan []byte, 8)
+	var dnsName atomic.Value
+	dnsName.Store("ads.example.test")
+	r := New(Config{Reserve: func(bool) (Reservation, error) { return Reservation{Port: 49020, Close: func() {}}, nil }, Send: func(b []byte) error { tx <- b; return nil }, Deliver: func([]byte) error { return nil }, KnownHost: func(string) string { return dnsName.Load().(string) }, Blocked: func(host, ip string) bool { return host == "ads.example.test" || host == "youtubei.googleapis.com" }})
+	defer func() { r.Stop(); r.Wait() }()
+	r.Outbound(udpPacket(false, 42000, 443, []byte{0x40, 1, 2, 3}))
+	if r.blockN.Load() != 1 || r.txN.Load() != 0 {
+		t.Fatal("DNS-known advertising flow passed")
+	}
+	// Authenticated SNI overrides DNS association on shared CDN addresses.
+	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "google-v1")))
+	read(t, tx)
+	dnsName.Store("") // Expired/ambiguous DNS must not persist a block decision.
+	r.Outbound(udpPacket(false, 42001, 443, []byte{0x40, 4, 5}))
+	read(t, tx)
+	r.Outbound(udpPacket(false, 42002, 443, fixture(t, "fragment-0")))
+	first := read(t, tx)
+	r.Outbound(udpPacket(false, 42002, 443, fixture(t, "fragment-1")))
+	if r.blockN.Load() != 2 || r.Inbound(reply(first)) {
+		t.Fatal("late blocklist SNI did not revoke mapping")
+	}
+	// Fragmented ClientHello with reused CID must replace the old Google SNI.
+	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "fragment-0")))
+	read(t, tx)
+	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "fragment-1")))
+	if r.blockN.Load() != 3 {
+		t.Fatal("fragmented reused CID kept a stale permitted SNI")
+	}
+
+}
+
+func TestBlockedTupleReusedByUnparsedConnection(t *testing.T) {
+	tx := make(chan []byte, 4)
+	r := New(Config{Reserve: func(bool) (Reservation, error) { return Reservation{Port: 49030, Close: func() {}}, nil }, Send: func(b []byte) error { tx <- b; return nil }, Deliver: func([]byte) error { return nil }, Blocked: func(host, ip string) bool { return host == "ads.googlevideo.com" }})
+	defer func() { r.Stop(); r.Wait() }()
+	r.Outbound(udpPacket(false, 42000, 443, fixture(t, "blocked-v1")))
+	if r.blockN.Load() != 1 {
+		t.Fatal("advertising Initial not blocked")
+	}
+	initial := fixture(t, "youtube-v1")
+	initial[6] ^= 1 // New CID, hence unauthenticatable with the previous key.
+	r.Outbound(udpPacket(false, 42000, 443, initial))
+	read(t, tx)
+	if r.unknownN.Load() != 1 || r.parseFailN.Load() != 1 {
+		t.Fatal("parser failure inherited the previous block verdict")
 	}
 }

@@ -53,6 +53,23 @@ func isInitial(b []byte) bool {
 	return (v == 1 && t == 0) || (v == 0x6b3343cf && t == 1)
 }
 
+// Initial connection IDs are visible even when the version/SNI parser fails.
+// Known Handshake headers must not reset classification on their server CID.
+func initialConnectionID(b []byte) []byte {
+	if len(b) < 7 || b[0]&0xc0 != 0xc0 {
+		return nil
+	}
+	v := binary.BigEndian.Uint32(b[1:5])
+	if v == 0 || ((v == 1 || v == 0x6b3343cf) && !isInitial(b)) {
+		return nil
+	}
+	n := int(b[5])
+	if n == 0 || n > 20 || len(b) < 6+n {
+		return nil
+	}
+	return b[6 : 6+n]
+}
+
 // inspect returns a complete SNI, or pending=true for authenticated fragments.
 func (h *hello) inspect(datagram []byte) (host string, pending bool) {
 	for len(datagram) > 0 {

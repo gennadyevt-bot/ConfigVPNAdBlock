@@ -127,16 +127,35 @@ func testUpstreamConcurrentTCP(t *testing.T, mode string) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	googleInitial, e := os.ReadFile("internal/quicfast/testdata/google-v1.bin")
+	if e != nil {
+		t.Fatal(e)
+	}
+	// Establish the encrypted peer session before the burst. UDP itself has no
+	// retransmission during a cold WG/AWG handshake; this test checks packet
+	// mapping and concurrent traffic on an established VPN, not UDP reliability.
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	warm, warmErr := wgDialTCPContext(ctx, "10.99.0.1:443")
+	cancel()
+	if warmErr != nil {
+		t.Fatal(warmErr)
+	}
+	warm.Close()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 20; i++ {
-			payload := initial
-			if i > 0 {
-				payload = []byte{0x40, byte(i), 0x55, 0x66}
+			payload := []byte{0x40, byte(i), 0x55, 0x66}
+			if i == 0 {
+				payload = initial
 			}
-			packet := rawTestUDP(payload)
+			if i == 1 {
+				payload = googleInitial
+			}
+			// Three separate mappings: YouTube, Chrome/Google and unknown cached QUIC.
+			clientPort := uint16(42000 + i%3)
+			packet := rawTestUDP(payload, clientPort)
 			app.SetDeadline(time.Now().Add(2500 * time.Millisecond))
 			if _, e := app.Write(packet); e != nil {
 				t.Error(e)
@@ -144,7 +163,7 @@ func testUpstreamConcurrentTCP(t *testing.T, mode string) {
 			}
 			reply := make([]byte, 1500)
 			n, e := app.Read(reply)
-			if e != nil || n < 28 || binary.BigEndian.Uint16(reply[22:24]) != 42000 || !bytes.Equal(payload, reply[28:n]) {
+			if e != nil || n < 28 || binary.BigEndian.Uint16(reply[22:24]) != clientPort || !bytes.Equal(payload, reply[28:n]) {
 				t.Errorf("raw QUIC roundtrip %d: len=%d err=%v stats=%s flow=%s", i, n, e, WgUpstreamStats(), FlowLog())
 				return
 			}
@@ -218,7 +237,7 @@ func testPacketDevice(fd, mtu int, settings string, protect func(int) bool, logf
 }
 
 // Complete IPv4 datagram from the Android side, including its UDP checksum.
-func rawTestUDP(payload []byte) []byte {
+func rawTestUDP(payload []byte, clientPort uint16) []byte {
 	b := make([]byte, 28+len(payload))
 	b[0] = 0x45
 	b[8] = 64
@@ -241,7 +260,7 @@ func rawTestUDP(payload []byte) []byte {
 		return ^uint16(s)
 	}
 	binary.BigEndian.PutUint16(b[10:], sum(b[:20]))
-	binary.BigEndian.PutUint16(b[20:], 42000)
+	binary.BigEndian.PutUint16(b[20:], clientPort)
 	binary.BigEndian.PutUint16(b[22:], 443)
 	binary.BigEndian.PutUint16(b[24:], uint16(len(b)-20))
 	copy(b[28:], payload)

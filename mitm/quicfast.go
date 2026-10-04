@@ -69,12 +69,14 @@ func attachQuicFastPath(tun *tunCounter) {
 			return nil
 		},
 		// Authenticated SNI is authoritative; shared/stale DNS IP mappings
-		// must not widen the bypass or block an unrelated video hostname.
-		Blocked: func(host, ip string) bool { return isBlocked(host) }, Log: flowLog,
+		// must not block an unrelated hostname.
+		Blocked:   func(host, ip string) bool { return host != "" && isBlocked(host) },
+		KnownHost: func(ip string) string { host, _ := dnsIPMapGet(ip); return host },
+		Log:       flowLog,
 	})
 	tun.fast = r
 	u.link.rawMu.Lock()
 	u.link.raw = r
 	u.link.rawMu.Unlock()
-	flowLog("QUIC_FAST_READY packet_socket video_domains_only DNS_BLOCK_AND_TCP_MITM_ON")
+	flowLog("QUIC_FAST_READY packet_socket blocklist_only_unknown_pass DNS_BLOCK_AND_TCP_MITM_ON")
 }
