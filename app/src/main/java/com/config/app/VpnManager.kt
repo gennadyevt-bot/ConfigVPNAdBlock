@@ -10,6 +10,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
 import com.wireguard.android.backend.Backend as WgBackend
 import com.wireguard.android.backend.GoBackend as WgGoBackend
 import com.wireguard.android.backend.Tunnel as WgBackendTunnel
@@ -23,12 +26,9 @@ import java.io.ByteArrayInputStream
 
 class VpnManager private constructor(private val context: Context) {
 
-    // WireGuard: серверы БЕЗ junk-параметров — здесь App VPN (IncludedApplications)
-    // работает гарантированно (проверено).
     private val wgBackend: WgBackend = WgGoBackend(context.applicationContext)
 
-    // AmneziaWG: серверы С junk-параметрами Jc/Jmin/Jmax/S1/S2/H1-H4 —
-    // маскируют WireGuard от DPI РНК. App VPN для таких серверов не гарантируется.
+    // Both protocols use UnifiedVpnService's application scope when AdBlock is on.
     private val awgBackend: AwgBackend = AwgGoBackend(context.applicationContext, NoopTunnelActionHandler())
 
     private var currentWgConfig: WgConfig? = null
@@ -41,6 +41,8 @@ class VpnManager private constructor(private val context: Context) {
 
     private var currentServer: ServerInfo? = null
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val lifecycleMutex = Mutex()
+    private val lifecycleRequests = AtomicLong()
 
     private fun dbg(msg: String) {
         try {
@@ -59,72 +61,110 @@ class VpnManager private constructor(private val context: Context) {
     }
 
     fun connect(server: ServerInfo) {
-        // БЕЗ guard'а от параллельных входов: он застревал после обрыва сессии
-        // и молча глушил все повторные connect'ы (VPN не поднимался вообще).
-        // Гонка запросов решается на уровне request_id в UnifiedVpnService.
-        android.util.Log.i("ConfigVPN", "connect: call server=" + server.name)
+        val request = lifecycleRequests.incrementAndGet()
         scope.launch {
-            try {
-                val prepareIntent = VpnService.prepare(context)
-                if (prepareIntent != null) {
-                    withContext(Dispatchers.Main) {
-                        updateStatus(VpnStatus.ERROR)
-                        showToast("Ошибка: разрешение VPN не дано. Откройте приложение и нажмите CONNECT.")
-                    }
-                    return@launch
-                }
-
-                currentServer = server
-                withContext(Dispatchers.Main) {
-                    onServerChanged?.invoke(server)
-                    updateStatus(VpnStatus.CONNECTING)
-                }
-
-                vpnStateStorage.setWasConnected(true)
-                vpnStateStorage.setLastServer(server.id)
-
-                val serviceIntent = Intent(context, VpnKeepAliveService::class.java)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    context.startForegroundService(serviceIntent)
-                } else {
-                    context.startService(serviceIntent)
-                }
-
-                val includedApps = AppVpnStorage(context).getSelectedPackages().toList()
-
-                // Конфиг с junk-параметрами (AmneziaWG) идёт через AWG-бэкенд —
-                // он обходит DPI РНК. Обычные конфиги — через WireGuard с App VPN.
-                val wantsAwg = server.jc.isNotEmpty() && server.jc != "0"
-                if (wantsAwg) {
-                    connectAwg(server, includedApps)
-                } else {
-                    connectWg(server, includedApps)
-                }
-
-                withContext(Dispatchers.Main) {
-                    if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                            .getBoolean("adblock_enabled", false) &&
-                        (!UnifiedVpnService.active || !UnifiedAdBlock.ready)) {
-                        throw IllegalStateException("AdBlock остановился во время подключения")
-                    }
-                    updateStatus(VpnStatus.CONNECTED)
-                    StopVpnWidget.updateWidget(context, VpnStatus.CONNECTED)
-                }
-            } catch (e: Exception) {
-                val err = e.message ?: e.toString()
-                android.util.Log.e("ConfigVPN", "Connect failed", e)
-                vpnStateStorage.setWasConnected(false)
-                withContext(Dispatchers.Main) {
-                    updateStatus(VpnStatus.ERROR)
-                    StopVpnWidget.updateWidget(context, VpnStatus.ERROR)
-                    showToast("Ошибка: $err")
+            lifecycleMutex.withLock {
+                if (request == lifecycleRequests.get()) {
+                    val appPrefs = AppVpnStorage(context)
+                    val target = if (appPrefs.isEnabled()) {
+                        EmbeddedServers.all(context).firstOrNull { it.id == appPrefs.getServerId() } ?: server
+                    } else server
+                    connectLocked(target, false, request)
                 }
             }
         }
     }
 
-    private suspend fun connectWg(server: ServerInfo, includedApps: List<String>) {
-        val configString = buildConfigString(server, includedApps, withAwg = false)
+    fun reapplyAppVpnScope() {
+        // Do not queue a connection for an off/disconnecting session. The request
+        // token also invalidates a queued rebuild immediately on manual STOP.
+        if (!vpnStateStorage.wasConnected() ||
+            (globalStatus != VpnStatus.CONNECTED && globalStatus != VpnStatus.CONNECTING)) return
+        val request = lifecycleRequests.get()
+        scope.launch {
+            lifecycleMutex.withLock {
+                if (request != lifecycleRequests.get() || !vpnStateStorage.wasConnected() ||
+                    globalStatus != VpnStatus.CONNECTED) return@withLock
+                val current = currentServer ?: return@withLock
+                val appPrefs = AppVpnStorage(context)
+                val target = if (appPrefs.isEnabled()) {
+                    EmbeddedServers.all(context).firstOrNull { it.id == appPrefs.getServerId() } ?: current
+                } else current
+                connectLocked(target, true, request)
+            }
+        }
+    }
+
+    private suspend fun connectLocked(server: ServerInfo, forceRebuild: Boolean, request: Long) {
+        try {
+            val prepareIntent = VpnService.prepare(context)
+            if (prepareIntent != null) {
+                withContext(Dispatchers.Main) {
+                    updateStatus(VpnStatus.ERROR)
+                    showToast("Ошибка: разрешение VPN не дано. Откройте приложение и нажмите CONNECT.")
+                }
+                return
+            }
+
+            currentServer = server
+            withContext(Dispatchers.Main) {
+                onServerChanged?.invoke(server)
+                updateStatus(VpnStatus.CONNECTING)
+            }
+
+            if (request != lifecycleRequests.get()) return
+            vpnStateStorage.setWasConnected(true)
+            vpnStateStorage.setLastServer(server.id)
+
+            val serviceIntent = Intent(context, VpnKeepAliveService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+
+            val appPrefs = AppVpnStorage(context)
+            val includedApps = if (appPrefs.isEnabled()) appPrefs.getSelectedPackages().toList() else emptyList()
+            val excludedApps = if (appPrefs.isEnabled() && includedApps.isEmpty()) appPrefs.getExcludedPackages().toList() else emptyList()
+            if (forceRebuild && !UnifiedVpnService.active) {
+                if (usingAwg) awgBackend.setState(AwgTunnel.getInstance(), AwgBackendTunnel.State.DOWN, currentAwgConfig)
+                else wgBackend.setState(WgTunnel.getInstance(), WgBackendTunnel.State.DOWN, currentWgConfig)
+            }
+
+            // Конфиг с junk-параметрами (AmneziaWG) идёт через AWG-бэкенд —
+            // он обходит DPI РНК. Обычные конфиги — через WireGuard с App VPN.
+            val wantsAwg = server.jc.isNotEmpty() && server.jc != "0"
+            if (wantsAwg) {
+                connectAwg(server, includedApps, excludedApps, forceRebuild)
+            } else {
+                connectWg(server, includedApps, excludedApps, forceRebuild)
+            }
+
+            withContext(Dispatchers.Main) {
+                if (request != lifecycleRequests.get()) return@withContext
+                if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                        .getBoolean("adblock_enabled", false) &&
+                    (!UnifiedVpnService.active || !UnifiedAdBlock.ready)) {
+                    throw IllegalStateException("AdBlock остановился во время подключения")
+                }
+                updateStatus(VpnStatus.CONNECTED)
+                StopVpnWidget.updateWidget(context, VpnStatus.CONNECTED)
+            }
+        } catch (e: Exception) {
+            if (request != lifecycleRequests.get()) return
+            val err = e.message ?: e.toString()
+            android.util.Log.e("ConfigVPN", "Connect failed", e)
+            vpnStateStorage.setWasConnected(false)
+            withContext(Dispatchers.Main) {
+                updateStatus(VpnStatus.ERROR)
+                StopVpnWidget.updateWidget(context, VpnStatus.ERROR)
+                showToast("Ошибка: $err")
+            }
+        }
+    }
+
+    private suspend fun connectWg(server: ServerInfo, includedApps: List<String>, excludedApps: List<String>, forceRebuild: Boolean) {
+        val configString = buildConfigString(server, includedApps, excludedApps, withAwg = false)
 
         val config = WgConfig.parse(ByteArrayInputStream(configString.toByteArray()))
         currentWgConfig = config
@@ -137,7 +177,7 @@ class VpnManager private constructor(private val context: Context) {
         // AdBlock ON: Android TUN → фильтр → WG/AWG packet engine.
         // При ошибке фильтра подключение завершается с явной ошибкой.
         if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) {
-            val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server)
+            val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server, forceRebuild = forceRebuild)
             if (adOk) {
                 dbg("ADBLOCK: ACTIVE")
                 probePaths()
@@ -145,23 +185,10 @@ class VpnManager private constructor(private val context: Context) {
             }
             throw IllegalStateException("AdBlock не запущен. Откройте журнал AdBlock")
         }
-        try {
-            val t0 = System.currentTimeMillis()
-            wgBackend.setState(tunnel, WgBackendTunnel.State.UP, config)
-            android.util.Log.d("ConfigVPN", "WG handshake: ${System.currentTimeMillis() - t0} ms")
-            dbg("WG up: " + (System.currentTimeMillis() - t0) + " ms")
-        } catch (e: Exception) {
-            if (includedApps.isNotEmpty()) {
-                android.util.Log.w("ConfigVPN", "Backend failed with IncludedApplications, retrying without...", e)
-                val fallbackConfig = WgConfig.parse(ByteArrayInputStream(buildConfigString(server).toByteArray()))
-                wgBackend.setState(tunnel, WgBackendTunnel.State.UP, fallbackConfig)
-                withContext(Dispatchers.Main) {
-                    showToast("App VPN: приложение не найдено, VPN работает для всех")
-                }
-            } else {
-                throw e
-            }
-        }
+        val t0 = System.currentTimeMillis()
+        wgBackend.setState(tunnel, WgBackendTunnel.State.UP, config)
+        android.util.Log.d("ConfigVPN", "WG handshake: ${System.currentTimeMillis() - t0} ms")
+        dbg("WG up: " + (System.currentTimeMillis() - t0) + " ms")
 
         warnIfNoTraffic {
             runCatching { wgBackend.getStatistics(tunnel).totalRx() }.getOrNull()
@@ -169,9 +196,9 @@ class VpnManager private constructor(private val context: Context) {
         probePaths()
     }
 
-    private suspend fun connectAwg(server: ServerInfo, includedApps: List<String>) {
+    private suspend fun connectAwg(server: ServerInfo, includedApps: List<String>, excludedApps: List<String>, forceRebuild: Boolean) {
         try {
-            val configString = buildConfigString(server, includedApps, withAwg = true)
+            val configString = buildConfigString(server, includedApps, excludedApps, withAwg = true)
 
             val config = AwgConfig.parse(ByteArrayInputStream(configString.toByteArray()))
             currentAwgConfig = config
@@ -179,7 +206,7 @@ class VpnManager private constructor(private val context: Context) {
 
             if (context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getBoolean("adblock_enabled", false)) {
                 context.startForegroundService(Intent(context, UnifiedVpnService::class.java))
-                val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server, awg = true)
+                val adOk = UnifiedVpnService.connectAdBlockBlocking(context, server, awg = true, forceRebuild = forceRebuild)
                 if (adOk) {
                     dbg("ADBLOCK: AWG datapath active")
                     return
@@ -200,7 +227,7 @@ class VpnManager private constructor(private val context: Context) {
             // Фолбэк: сервер не принял junk-параметры — пробуем обычный WireGuard
             android.util.Log.w("ConfigVPN", "AWG failed, falling back to plain WireGuard", e)
             dbg("AWG FAILED: " + (e.stackTraceToString() ?: e.toString()).take(1500))
-            connectWg(server, includedApps)
+            connectWg(server, includedApps, excludedApps, forceRebuild)
         }
     }
 
@@ -219,35 +246,40 @@ class VpnManager private constructor(private val context: Context) {
     }
 
     fun disconnect() {
+        lifecycleRequests.incrementAndGet()
+        vpnStateStorage.setWasConnected(false)
+        context.stopService(Intent(context, VpnKeepAliveService::class.java))
         scope.launch {
-            try {
-                withContext(Dispatchers.Main) {
-                    updateStatus(VpnStatus.DISCONNECTING)
-                }
+            lifecycleMutex.withLock {
+                try {
+                    withContext(Dispatchers.Main) {
+                        updateStatus(VpnStatus.DISCONNECTING)
+                    }
 
-                vpnStateStorage.setWasConnected(false)
-                context.stopService(Intent(context, VpnKeepAliveService::class.java))
-
-                if (usingAwg) {
-                    awgBackend.setState(AwgTunnel.getInstance(), AwgBackendTunnel.State.DOWN, currentAwgConfig)
-                } else {
-                    wgBackend.setState(WgTunnel.getInstance(), WgBackendTunnel.State.DOWN, currentWgConfig)
-                }
-                // Phase C: гасим unified-сервис после разрыва туннеля
-                context.startService(Intent(context, UnifiedVpnService::class.java).setAction(UnifiedVpnService.ACTION_STOP))
-                withContext(Dispatchers.Main) {
-                    updateStatus(VpnStatus.DISCONNECTED)
-                    currentServer = null
-                    onServerChanged?.invoke(null)
-                    StopVpnWidget.updateWidget(context, VpnStatus.DISCONNECTED)
-                }
-            } catch (e: Exception) {
-                val err = e.message ?: e.toString()
-                android.util.Log.e("ConfigVPN", "Disconnect failed", e)
-                withContext(Dispatchers.Main) {
-                    updateStatus(VpnStatus.ERROR)
-                    StopVpnWidget.updateWidget(context, VpnStatus.ERROR)
-                    showToast("Ошибка: $err")
+                    // Recheck after any in-flight connect has released the mutex.
+                    vpnStateStorage.setWasConnected(false)
+                    context.stopService(Intent(context, VpnKeepAliveService::class.java))
+                    if (usingAwg) {
+                        awgBackend.setState(AwgTunnel.getInstance(), AwgBackendTunnel.State.DOWN, currentAwgConfig)
+                    } else {
+                        wgBackend.setState(WgTunnel.getInstance(), WgBackendTunnel.State.DOWN, currentWgConfig)
+                    }
+                    // Phase C: гасим unified-сервис после разрыва туннеля
+                    context.startService(Intent(context, UnifiedVpnService::class.java).setAction(UnifiedVpnService.ACTION_STOP))
+                    withContext(Dispatchers.Main) {
+                        updateStatus(VpnStatus.DISCONNECTED)
+                        currentServer = null
+                        onServerChanged?.invoke(null)
+                        StopVpnWidget.updateWidget(context, VpnStatus.DISCONNECTED)
+                    }
+                } catch (e: Exception) {
+                    val err = e.message ?: e.toString()
+                    android.util.Log.e("ConfigVPN", "Disconnect failed", e)
+                    withContext(Dispatchers.Main) {
+                        updateStatus(VpnStatus.ERROR)
+                        StopVpnWidget.updateWidget(context, VpnStatus.ERROR)
+                        showToast("Ошибка: $err")
+                    }
                 }
             }
         }
@@ -323,7 +355,7 @@ class VpnManager private constructor(private val context: Context) {
 
         fun getInstance(context: Context): VpnManager {
             return instance ?: synchronized(this) {
-                instance ?: VpnManager(context).also { instance = it }
+                instance ?: VpnManager(context.applicationContext).also { instance = it }
             }
         }
 
@@ -342,7 +374,7 @@ class VpnManager private constructor(private val context: Context) {
         }
     }
 
-    private fun buildConfigString(server: ServerInfo, includedApps: List<String> = emptyList(), withAwg: Boolean = false): String {
+    private fun buildConfigString(server: ServerInfo, includedApps: List<String> = emptyList(), excludedApps: List<String> = emptyList(), withAwg: Boolean = false): String {
         val allowedIPs = buildAllowedIPs(server)
         val dns = sanitizeDns(server.interfaceDns, server.interfaceAddress)
         return buildString {
@@ -365,14 +397,10 @@ class VpnManager private constructor(private val context: Context) {
                 if (server.h4.isNotEmpty() && server.h4 != "0") appendLine("H4 = ${server.h4}")
             }
 
-            // App VPN: парсеры ОБЕИХ библиотек (WireGuard и AmneziaWG 2.3.7)
-            // поддерживают IncludedApplications — байткод GoBackend подтверждает.
-            val pm = context.packageManager
-            val validApps = includedApps.filter { pkg ->
-                try { pm.getApplicationInfo(pkg, 0); true }
-                catch (e: Exception) { android.util.Log.w("ConfigVPN", "App не установлено: $pkg"); false }
-            }
-            validApps.forEach { appendLine("IncludedApplications = $it") }
+            // Preserve the same scope when AdBlock was explicitly disabled by the user.
+            // Never fall back to a wider, global scope after a backend error.
+            includedApps.forEach { appendLine("IncludedApplications = $it") }
+            excludedApps.forEach { appendLine("ExcludedApplications = $it") }
 
             appendLine("[Peer]")
             appendLine("PublicKey = ${server.peerPublicKey}")

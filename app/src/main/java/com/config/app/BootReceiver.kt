@@ -16,7 +16,6 @@ class BootReceiver : BroadcastReceiver() {
             Log.i(TAG, "Boot completed — checking VPN state")
 
             val vpnStateStorage = VpnStateStorage(context)
-            val appVpnStorage = AppVpnStorage(context)
             val autoStorage = AutoConnectStorage(context)
 
             // Если VPN был включен до перезагрузки — восстанавливаем
@@ -41,12 +40,6 @@ class BootReceiver : BroadcastReceiver() {
                 } else {
                     context.startService(serviceIntent)
                 }
-            }
-
-            // Если включен App VPN
-            if (appVpnStorage.isEnabled() && appVpnStorage.getSelectedPackages().isNotEmpty()) {
-                Log.i(TAG, "App VPN enabled — starting AppMonitorService")
-                AppMonitorService.start(context)
             }
         }
     }

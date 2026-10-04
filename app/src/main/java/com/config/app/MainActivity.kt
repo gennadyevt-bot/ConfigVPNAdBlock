@@ -190,10 +190,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val appVpnStorage = AppVpnStorage(this)
-        if (appVpnStorage.isEnabled() && appVpnStorage.getSelectedPackages().isNotEmpty()) {
-            AppMonitorService.start(this)
-        }
     }
 
     private fun loadServers() {

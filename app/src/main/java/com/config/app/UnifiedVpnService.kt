@@ -71,13 +71,14 @@ class UnifiedVpnService : AndroidVpnService() {
         }
 
         /** Phase D entry: стартует сервис с extras и ждёт результата поднятия datapath. */
-        fun connectAdBlockBlocking(context: Context, server: ServerInfo, awg: Boolean = false): Boolean {
+        fun connectAdBlockBlocking(context: Context, server: ServerInfo, awg: Boolean = false, forceRebuild: Boolean = false): Boolean {
             val requestId = requestIds.incrementAndGet()
             val f = CompletableFuture<Boolean>()
             readyFutures[requestId] = f
             AdBlockLog.add("ADBLOCK: CONNECT_START rid=" + requestId)
             val i = Intent(context, UnifiedVpnService::class.java).setAction(ACTION_CONNECT)
                 .putExtra("request_id", requestId)
+                .putExtra("force_rebuild", forceRebuild)
                 .putExtra("name", server.name)
                 .putExtra("wgquick", buildWgQuick(server, awg))
                 .putExtra("awg", awg)
@@ -133,13 +134,17 @@ class UnifiedVpnService : AndroidVpnService() {
                             return@synchronized
                         }
                         val existing = dp
-                        if (existing != null && existing.running && UnifiedAdBlock.running && UnifiedAdBlock.ready) {
+                        if (!intent.getBooleanExtra("force_rebuild", false) &&
+                            existing != null && existing.running && UnifiedAdBlock.running && UnifiedAdBlock.ready) {
                             // datapath уже поднят (INLINE_ON/ACTIVE) — для этого
                             // запроса честный true, а не timeout чужого future.
                             readyFutures.remove(requestId, request)
                             request?.complete(true)
                             AdBlockLog.add("ADBLOCK: CONNECT_COMPLETE rid=" + requestId + " ok=true cached")
                             return@synchronized
+                        }
+                        if (intent.getBooleanExtra("force_rebuild", false)) {
+                            AdBlockLog.add("APP_VPN_SCOPE_REBUILD rid=$requestId")
                         }
                         val started = startDatapath(intent)
                         val ok = started && !stopping && !request.isDone
@@ -225,6 +230,7 @@ class UnifiedVpnService : AndroidVpnService() {
                 val excluded = appPrefs.getExcludedPackages()
                 if (included.isNotEmpty()) included.forEach { b.addAllowedApplication(it) }
                 else excluded.forEach { b.addDisallowedApplication(it) }
+                AdBlockLog.add("APP_VPN_SCOPE include=${included.size} exclude=${excluded.size}")
             }
             addresses.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { a ->
                 val ip: String; val pl: Int

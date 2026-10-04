@@ -7,6 +7,16 @@ class AppVpnStorage(context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    // Publish the entire scope together, before a running VPN rebuild reads it.
+    fun saveConfiguration(packages: Set<String>, includeMode: Boolean, serverId: String) {
+        prefs.edit()
+            .putStringSet(SELECTED_KEY, if (includeMode) HashSet(packages) else emptySet())
+            .putStringSet(EXCLUDED_KEY, if (includeMode) emptySet() else HashSet(packages))
+            .putBoolean(ENABLED_KEY, packages.isNotEmpty())
+            .putString(SERVER_ID_KEY, serverId)
+            .apply()
+    }
+
     fun setSelectedPackages(packages: Set<String>) {
         // HashSet() — обязательно, иначе putStringSet не видит изменения того же Set
         prefs.edit().putStringSet(SELECTED_KEY, HashSet(packages)).apply()

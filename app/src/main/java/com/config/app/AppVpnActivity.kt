@@ -1,17 +1,11 @@
 package com.config.app
 
-import android.app.AppOpsManager
-import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.Process
-import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
@@ -22,7 +16,6 @@ import android.widget.ProgressBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -77,24 +70,10 @@ class AppVpnActivity : AppCompatActivity() {
         val savedIdx = serversList.indexOfFirst { it.id == savedServerId }
         spServer.setSelection(if (savedIdx >= 0) savedIdx else 0)
 
-        if (!hasUsageStatsPermission()) {
-            showPermissionDialog()
-        } else {
-            initAppVpn()
-        }
+        initAppVpn()
     }
 
-    private var initialized = false
-
-    // Инициализация после выдачи разрешения Usage Stats.
-    // Первый запуск: разрешения нет → диалог → настройки → назад —
-    // onCreate уже отработал. Без этого блока после возврата список
-    // не грузился вообще, «пустое окно» лечилось только закрытием
-    // и повторным открытием.
     private fun initAppVpn() {
-        if (initialized) return
-        initialized = true
-
         val savedSelected = appVpnStorage.getSelectedPackages()
         val savedExcluded = appVpnStorage.getExcludedPackages()
         isIncludeMode = savedExcluded.isEmpty()
@@ -126,59 +105,25 @@ class AppVpnActivity : AppCompatActivity() {
 
 
         btnSave.setOnClickListener {
-            if (isIncludeMode) {
-                appVpnStorage.setSelectedPackages(selectedPackages)
-                appVpnStorage.setExcludedPackages(emptySet())
-            } else {
-                appVpnStorage.setSelectedPackages(emptySet())
-                appVpnStorage.setExcludedPackages(selectedPackages)
-            }
             val enabled = selectedPackages.isNotEmpty()
-            appVpnStorage.setEnabled(enabled)
-
             val selIdx = spServer.selectedItemPosition
-            if (serversList.isNotEmpty() && selIdx in serversList.indices) {
-                appVpnStorage.setServerId(serversList[selIdx].id)
-            }
+            val server = serversList.getOrNull(selIdx)
+            appVpnStorage.saveConfiguration(selectedPackages, isIncludeMode,
+                server?.id ?: appVpnStorage.getServerId())
 
             if (enabled) {
-                AppMonitorService.start(this)
-                if (VpnManager.globalStatus == VpnStatus.DISCONNECTED) {
-                    autoConnectVpn()
-                }
                 val modeText = if (isIncludeMode) "через VPN" else "обход VPN"
                 Toast.makeText(this, "Сохранено: ${selectedPackages.size} приложений ($modeText)", Toast.LENGTH_SHORT).show()
             } else {
-                AppMonitorService.stop(this)
                 Toast.makeText(this, "App VPN отключен", Toast.LENGTH_SHORT).show()
             }
+            // Builder application lists take effect only when a new TUN is established.
+            // Saving while disconnected never requests a connection.
+            VpnManager.getInstance(applicationContext).reapplyAppVpnScope()
             finish()
         }
 
         loadApps()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Возврат из настроек с выданным разрешением — продолжаем
-        // инициализацию, которая не была выполнена в onCreate.
-        if (!initialized && hasUsageStatsPermission()) {
-            initAppVpn()
-        }
-    }
-
-    private fun autoConnectVpn() {
-        val servers = EmbeddedServers.all(this)
-        val serverId = appVpnStorage.getServerId()
-        // Сначала выбранный в App VPN конфиг, иначе первый валидный
-        val validServer = servers.firstOrNull {
-            it.id == serverId && it.interfacePrivateKey.isNotEmpty() && it.peerPublicKey.isNotEmpty() && it.peerEndpoint.isNotEmpty()
-        } ?: servers.firstOrNull {
-            it.interfacePrivateKey.isNotEmpty() && it.peerPublicKey.isNotEmpty() && it.peerEndpoint.isNotEmpty()
-        }
-        validServer?.let { server ->
-            VpnManager.getInstance(this).connect(server)
-        }
     }
 
     private fun loadApps() {
@@ -289,24 +234,4 @@ class AppVpnActivity : AppCompatActivity() {
         tvCounter.text = "Выбрано: ${selectedPackages.size}"
     }
 
-    private fun hasUsageStatsPermission(): Boolean {
-        val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
-        } else {
-            @Suppress("DEPRECATION")
-            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
-        }
-        return mode == AppOpsManager.MODE_ALLOWED
-    }
-
-    private fun showPermissionDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("Разрешение")
-            .setMessage("App VPN читает список запускаемых приложений и статистику их использования, чтобы автоматически включать VPN для выбранных вами приложений. Обработка выполняется на устройстве; список и история использования не отправляются разработчику. Доступ можно отозвать в настройках Android. Продолжить?")
-            .setPositiveButton("Настройки") { _, _ -> startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
-            .setNegativeButton("Отмена") { _, _ -> finish() }
-            .setCancelable(false)
-            .show()
-    }
 }
