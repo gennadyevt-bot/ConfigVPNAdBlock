@@ -281,7 +281,7 @@ class UnifiedVpnService : AndroidVpnService() {
                 ParcelFileDescriptor.adoptFd(nativeFd).close()
                 return failDp("AdBlock engine initialization failed")
             }
-            configureTCP443Diagnostic(appConfig)
+            configureTCP443Diagnostic(scopeMode, allowed)
             // StartPacketVPN takes ownership of nativeFd, even on error.
             mitm.Mitm.startPacketVPN(nativeFd.toLong(), mtu.toLong(), settings)
             d.packetEngine = true
@@ -305,40 +305,17 @@ class UnifiedVpnService : AndroidVpnService() {
         }
     }
 
-    // alpha73 experiment: only Chrome-owned sockets inside an established INCLUDE TUN.
-    // Unknown UIDs keep MITM; never broaden this to the whole tunnel.
-    private fun configureTCP443Diagnostic(config: AppVpnConfiguration) {
+    // alpha74 experiment uses the Builder scope that successfully established
+    // this TUN; Android already restricts which applications can enter it.
+    private fun configureTCP443Diagnostic(mode: String, allowed: List<String>) {
         mitm.Mitm.setDirect443(false)
         mitm.Mitm.setDirect443Scope(null)
         mitm.Mitm.resetTCP443Diagnostics()
-        tcp443DiagnosticScope = "OFF"
-        if (!config.enabled || config.mode != "INCLUDE" || "com.android.chrome" !in config.packages) return
-        if (Build.VERSION.SDK_INT < 29) {
-            tcp443DiagnosticScope = "UNSUPPORTED_ANDROID_API"
-            AdBlockLog.add("TCP443_DIAG_SCOPE_UNAVAILABLE api=" + Build.VERSION.SDK_INT)
-            return
-        }
-        val chromeUid = try { packageManager.getApplicationInfo("com.android.chrome", 0).uid }
-            catch (e: Exception) { AdBlockLog.add("TCP443_DIAG_SCOPE_UNAVAILABLE chrome=" + e.message); return }
-        val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-        mitm.Mitm.setDirect443Scope(object : mitm.TCP443Scope {
-            override fun directForFlow(sourceIP: String, sourcePort: Long, destinationIP: String, destinationPort: Long): Boolean {
-                return try {
-                    val uid = connectivity.getConnectionOwnerUid(OsConstants.IPPROTO_TCP,
-                        java.net.InetSocketAddress(sourceIP, sourcePort.toInt()),
-                        java.net.InetSocketAddress(destinationIP, destinationPort.toInt()))
-                    if (uid < 0) AdBlockLog.add("TCP443_DIAG_UID_UNKNOWN dst=$destinationIP:$destinationPort")
-                    if (uid == chromeUid) AdBlockLog.add("TCP443_DIAG_UID_MATCH uid=$uid dst=$destinationIP:$destinationPort")
-                    uid == chromeUid
-                } catch (e: Exception) {
-                    AdBlockLog.add("TCP443_DIAG_UID_FAIL err=" + e.javaClass.simpleName)
-                    false
-                }
-            }
-        })
-        tcp443DiagnosticScope = "INCLUDE_CHROME_UID_$chromeUid"
-        mitm.Mitm.setDirect443(true)
-        AdBlockLog.add("TCP443_DIAG_ENABLED scope=$tcp443DiagnosticScope DNS_SNI_BLOCK_ON MITM_OTHER_APPS_ON")
+        val rawInclude = mode == "INCLUDE" && allowed.isNotEmpty()
+        mitm.Mitm.setTcp443RawInclude(rawInclude)
+        tcp443DiagnosticScope = if (rawInclude) "RAW_INCLUDE_DIAG" else "OFF"
+        AdBlockLog.add("TCP443_MODE mode=" + (if (rawInclude) "RAW_INCLUDE_DIAG" else "NORMAL") +
+            " tunAppScope=$mode DNS_SNI_BLOCK_ON WG_ONLY")
     }
 
     private fun failDp(why: String): Boolean {
@@ -353,7 +330,7 @@ class UnifiedVpnService : AndroidVpnService() {
         // a different service instance.
         val d = dp ?: return
         active = false
-        runCatching { mitm.Mitm.setDirect443(false); mitm.Mitm.setDirect443Scope(null) }
+        runCatching { mitm.Mitm.setTcp443RawInclude(false); mitm.Mitm.setDirect443(false); mitm.Mitm.setDirect443Scope(null) }
         tcp443DiagnosticScope = "OFF"
         AdBlockLog.add("DATAPATH_STOP reason=$reason")
         runCatching {

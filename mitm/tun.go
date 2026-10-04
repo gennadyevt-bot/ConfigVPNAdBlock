@@ -1162,7 +1162,12 @@ func handle443(conn adapter.TCPConn, hp string) {
 		_ = conn.Close()
 	}()
 	atomic.AddInt64(&acceptedN, 1)
-	diagnostic := diagnostic443For(conn)
+	rawInclude := raw443Include.Load()
+	rawCounters := raw443Current.Load()
+	diagnostic := !rawInclude && diagnostic443For(conn)
+	if rawInclude {
+		flowLog(fmt.Sprintf("TCP443_RAW_ENTER id=%d dst=%s stage=client_hello", fid, hp))
+	}
 	if diagnostic {
 		flowLog(fmt.Sprintf("TCP443_DIAG_MATCH dst=%s stage=client_hello", hp))
 	}
@@ -1177,7 +1182,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 	}
 	// DoH-эндпоинты: сырой туннель без MITM (иначе "unknown certificate",
 	// т.к. клиент не доверяет нашему CA -> DNS умирает целиком)
-	if DoHHosts[hostOnly] && !diagnostic {
+	if DoHHosts[hostOnly] && !diagnostic && !rawInclude {
 		up, err := dialTCP(hp)
 		if err != nil {
 			flowLog(fmt.Sprintf("#%d dohDial FAIL %v", fid, err))
@@ -1268,6 +1273,10 @@ func handle443(conn adapter.TCPConn, hp string) {
 		addSNILog("BLOCK", peekSNI)
 		flowLog(fmt.Sprintf("#%d SAFE_BLOCK_SNI sni=%q dst=%s", fid, peekSNI, hp))
 		closeReason = "safeBlockSNI"
+		return
+	}
+	if rawInclude {
+		closeReason = raw443ThroughWG(conn, hp, peekSNI, raw, fid, rawCounters)
 		return
 	}
 	if diagnostic {
