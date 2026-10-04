@@ -12,18 +12,19 @@ package mitm
 
 import (
 	"bufio"
-	"errors"
+	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"crypto/sha256"
-	"crypto/x509"
-	"bytes"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"sort"
 	"strconv"
@@ -759,6 +760,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		flowLog("DZEN_BYPASS_ONCE_CONSUMED sni=" + sni)
 		return false, false
 	}
+	stage443("MITM443_ATTEMPT", sni, "pipeline=dzen")
 	flowLog("DZEN_MITM_BEGIN host=" + sni)
 	// Resolve the leaf before consuming/writing TLS or taking ownership.
 	leaf, err := certForName(sni)
@@ -788,6 +790,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(20 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
+		stage443("MITM443_TLS_CLIENT_FAIL", sni, "stage=handshake err="+err.Error())
 		// 218: bypass ТОЛЬКО при реальном отказе браузера от сертификата.
 		// timeout/EOF/abort после TLS-слёта - обычная ошибка соединения,
 		// reconnect должен снова попытать MITM.
@@ -806,6 +809,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		}
 		return true, false
 	}
+	stage443("MITM443_TLS_CLIENT_OK", sni, "stage=handshake")
 	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 	flowLog("DZEN_TLS_OK sni=" + sni)
 	// 218: успешный TLS снимает возможный старый transient bypass этого sni
@@ -947,21 +951,25 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 		}
 		ip, err := resolveRealIP(upstreamHost)
 		if err != nil {
+			stage443("MITM443_UPSTREAM_FAIL", sni, "stage=resolve err="+err.Error())
 			flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " stage=resolve err=" + err.Error())
 			continue // апстрим не рвёт клиентскую TLS-сессию
 		}
 		up, err := dialTCP(net.JoinHostPort(ip, "443"))
 		if err != nil {
+			stage443("MITM443_UPSTREAM_FAIL", sni, "stage=dial err="+err.Error())
 			flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " stage=updial err=" + err.Error())
 			continue
 		}
 		upTLS := tls.Client(up, &tls.Config{ServerName: upstreamHost, MinVersion: tls.VersionTLS12})
 		_ = upTLS.SetDeadline(time.Now().Add(20 * time.Second))
 		if err := upTLS.Handshake(); err != nil {
+			stage443("MITM443_UPSTREAM_FAIL", sni, "stage=tls err="+err.Error())
 			_ = up.Close()
 			flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " stage=uptls err=" + err.Error())
 			continue
 		}
+		stage443("MITM443_UPSTREAM_OK", sni, "stage=tls")
 		_ = upTLS.SetDeadline(time.Now().Add(30 * time.Second))
 		_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 
@@ -987,6 +995,7 @@ func handleDzenMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok boo
 			flowLog("DZEN_MITM_POST_TLS_FAIL sni=" + sni + " upread:" + err.Error())
 			continue
 		}
+		stage443("MITM443_HTTP_OK", sni, "stage=upstream_response_headers")
 		flowLog(fmt.Sprintf("DZEN_RESP n=%d status=%s path=%s", reqs, resp.Status, req.URL.Path))
 		flowLog(fmt.Sprintf("DZEN_RESPONSE host=%s method=%s path=%s status=%s ct=%s len=%d",
 			upstreamHost, req.Method, req.URL.Path, resp.Status,
@@ -1698,6 +1707,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	}
 	// h2 больше не bypass — MITM принимает h2 через handleGenericH2
 
+	stage443("MITM443_ATTEMPT", sni, "pipeline=generic")
 	flowLog("GENERIC_MITM_BEGIN host=" + sni)
 	leaf, err := certForName(sni)
 	if err != nil {
@@ -1720,6 +1730,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 	tlsConn := tls.Server(&sniffConn{Conn: conn, prefix: raw}, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(20 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
+		stage443("MITM443_TLS_CLIENT_FAIL", sni, "stage=handshake err="+err.Error())
 		atomic.AddInt64(&genericMitmFailN, 1)
 		es := err.Error()
 		// runtime bypass только при явном cert reject, не при timeout/EOF
@@ -1731,6 +1742,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 		}
 		return true, false
 	}
+	stage443("MITM443_TLS_CLIENT_OK", sni, "stage=handshake")
 	_ = tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 	atomic.AddInt64(&genericMitmOKN, 1)
 	flowLog("GENERIC_MITM_OK sni=" + sni)
@@ -1822,6 +1834,7 @@ func handleGenericMITM(conn net.Conn, sni string, raw []byte) (handled bool, ok 
 			flowLog("GENERIC_MITM_FAIL read sni=" + sni + " err=" + err.Error())
 			return true, false
 		}
+		stage443("MITM443_HTTP_OK", sni, "stage=upstream_response_headers")
 		// AD_PAYLOAD_BLOCK: /video/_crpd/ + javascript + "play.google.com" -> пустой 200.
 		if (req.Host == "yandex.ru" || req.Host == "ya.ru") && (strings.HasPrefix(req.URL.Path, "/video/_crpd/") || strings.HasPrefix(req.URL.Path, "/weather/_cry/")) &&
 			strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "javascript") &&
@@ -1992,6 +2005,7 @@ func indexOf(b, sub []byte) int {
 func dialTLS(sni string) (net.Conn, error) {
 	conn, err := dialTCP(net.JoinHostPort(sni, "443"))
 	if err != nil {
+		stage443("MITM443_UPSTREAM_FAIL", sni, "stage=dial err="+err.Error())
 		return nil, err
 	}
 	cfg := &tls.Config{
@@ -2002,9 +2016,11 @@ func dialTLS(sni string) (net.Conn, error) {
 	tlsConn := tls.Client(conn, cfg)
 	_ = tlsConn.SetDeadline(time.Now().Add(15 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
+		stage443("MITM443_UPSTREAM_FAIL", sni, "stage=tls err="+err.Error())
 		_ = conn.Close()
 		return nil, err
 	}
+	stage443("MITM443_UPSTREAM_OK", sni, "stage=tls")
 	return tlsConn, nil
 }
 
@@ -2103,12 +2119,27 @@ func handleGenericH2(tlsConn *tls.Conn, sni string) bool {
 					return dialTCP(addr)
 				},
 			}
+			var tlsReported atomic.Bool
+			upReq = upReq.WithContext(httptrace.WithClientTrace(upReq.Context(), &httptrace.ClientTrace{
+				TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+					tlsReported.Store(true)
+					if err != nil {
+						stage443("MITM443_UPSTREAM_FAIL", sni, "stage=h2_upstream_tls err="+err.Error())
+					} else {
+						stage443("MITM443_UPSTREAM_OK", sni, "stage=h2_upstream_tls")
+					}
+				},
+			}))
 			resp, err := transport.RoundTrip(upReq)
 			if err != nil {
+				if !tlsReported.Load() {
+					stage443("MITM443_UPSTREAM_FAIL", sni, "stage=h2_before_tls err="+err.Error())
+				}
 				flowLog("GENERIC_H2_FAIL upstream host=" + r.Host + " err=" + err.Error())
 				w.WriteHeader(http.StatusBadGateway)
 				return
 			}
+			stage443("MITM443_HTTP_OK", sni, "stage=h2_upstream_response_headers")
 			defer resp.Body.Close()
 			// AD_PAYLOAD_BLOCK: /video/_crpd/ + javascript + "play.google.com" -> пустой 200.
 			// Остальные /video/_crpd/ не тронуты, body восстанавливается через MultiReader.

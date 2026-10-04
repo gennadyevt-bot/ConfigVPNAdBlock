@@ -69,6 +69,8 @@ class AdBlockJournalActivity : AppCompatActivity() {
             sb.append("wgUpstreamStats=").append(timed { mitm.Mitm.wgUpstreamStats() }).append("\n")
             sb.append("stackStats=").append(timed { mitm.Mitm.stackStats() }).append("\n")
             sb.append("tunStats=").append(timed { mitm.Mitm.tunStats() }).append("\n")
+            sb.append("tcp443DiagnosticScope=").append(UnifiedVpnService.tcp443DiagnosticScope).append("\n")
+            sb.append("tcp443Diagnostics=").append(timed { mitm.Mitm.tcp443Diagnostics() }).append("\n")
             sb.append("mitmStats=").append(timed { mitm.Mitm.mitmStats() }).append("\n")
             sb.append("caInfo=").append(timed { mitm.Mitm.caInfo() }).append("\n")
             sb.append("leafVerify=").append(timed { mitm.Mitm.leafVerify() }).append("\n")

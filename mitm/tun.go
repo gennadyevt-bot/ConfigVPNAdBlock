@@ -1162,6 +1162,10 @@ func handle443(conn adapter.TCPConn, hp string) {
 		_ = conn.Close()
 	}()
 	atomic.AddInt64(&acceptedN, 1)
+	diagnostic := diagnostic443For(conn)
+	if diagnostic {
+		flowLog(fmt.Sprintf("TCP443_DIAG_MATCH dst=%s stage=client_hello", hp))
+	}
 	fam := "v4"
 	if strings.Count(hp, ":") > 1 {
 		fam = "v6" // GPT: семейство адреса в каждом соединении
@@ -1173,7 +1177,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 	}
 	// DoH-эндпоинты: сырой туннель без MITM (иначе "unknown certificate",
 	// т.к. клиент не доверяет нашему CA -> DNS умирает целиком)
-	if DoHHosts[hostOnly] {
+	if DoHHosts[hostOnly] && !diagnostic {
 		up, err := dialTCP(hp)
 		if err != nil {
 			flowLog(fmt.Sprintf("#%d dohDial FAIL %v", fid, err))
@@ -1214,6 +1218,10 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// dst:443, реплей захваченного ClientHello, raw relay. Никакого
 	// TLS с нашей стороны — клиент не видит ни alert'ов, ни наших cert.
 	goDirect := func(tag string) {
+		diag := tag == "TCP443_DIAGNOSTIC"
+		if diag {
+			stage443("TCP443_DIRECT_ATTEMPT", peekSNI, "dst="+hp+" stage=dial")
+		}
 		dialFn := dialTCP
 		// DoH-хосты: короткий дедлайн (2.5s) вместо 5s — быстрый RST,
 		// браузер откатится на системный DNS через TUN (с нашей фильтрацией).
@@ -1223,6 +1231,9 @@ func handle443(conn adapter.TCPConn, hp string) {
 		up, err := dialFn(hp)
 		if err != nil {
 			atomic.AddInt64(&directFailN, 1)
+			if diag {
+				stage443("TCP443_DIRECT_FAIL", peekSNI, fmt.Sprintf("dst=%s stage=dial err=%v", hp, err))
+			}
 			flowLog(fmt.Sprintf("#%d %s direct FAIL %v", fid, tag, err))
 			closeReason = tag + "X"
 			return
@@ -1230,6 +1241,9 @@ func handle443(conn adapter.TCPConn, hp string) {
 		if len(raw) > 0 {
 			if _, werr := up.Write(raw); werr != nil {
 				atomic.AddInt64(&directFailN, 1)
+				if diag {
+					stage443("TCP443_DIRECT_FAIL", peekSNI, fmt.Sprintf("dst=%s stage=client_hello_write err=%v", hp, werr))
+				}
 				_ = up.Close()
 				closeReason = tag + "WriteX"
 				return
@@ -1238,7 +1252,11 @@ func handle443(conn adapter.TCPConn, hp string) {
 		atomic.AddInt64(&directOkN, 1)
 		flowLog(fmt.Sprintf("#%d %s relay dst=%s sni=%q", fid, tag, hp, peekSNI))
 		closeReason = tag
-		relay(conn, up)
+		if diag {
+			relay443Diagnostic(conn, up, peekSNI, hp)
+		} else {
+			relay(conn, up)
+		}
 	}
 	// SAFE MODE: HTTPS не расшифровываем и не подменяем сертификаты.
 	// Если ClientHello разобран и SNI попал в блок-лист, соединение
@@ -1250,6 +1268,11 @@ func handle443(conn adapter.TCPConn, hp string) {
 		addSNILog("BLOCK", peekSNI)
 		flowLog(fmt.Sprintf("#%d SAFE_BLOCK_SNI sni=%q dst=%s", fid, peekSNI, hp))
 		closeReason = "safeBlockSNI"
+		return
+	}
+	if diagnostic {
+		flowLog(fmt.Sprintf("TCP443_DIAG_BYPASS_MITM sni=%q dst=%s", peekSNI, hp))
+		goDirect("TCP443_DIAGNOSTIC")
 		return
 	}
 	// 0.6.0-content4: SELECTIVE content-filter по SNI — БЕЗ fake-IP.
