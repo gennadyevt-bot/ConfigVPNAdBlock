@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var vpnManager: VpnManager
     private lateinit var serverAdapter: ServerAdapter
     private lateinit var serverStorage: ServerStorage
+    private lateinit var tvAppVpnStatus: TextView
     private lateinit var tvStatus: TextView
     private lateinit var rvServers: RecyclerView
     private lateinit var tvTrafficDown: TextView
@@ -108,6 +109,8 @@ class MainActivity : AppCompatActivity() {
         vpnManager = VpnManager.getInstance(this)
         serverStorage = ServerStorage(this)
 
+        tvAppVpnStatus = findViewById(R.id.tvAppVpnStatus)
+        tvAppVpnStatus.setOnClickListener { startActivity(android.content.Intent(this, AppVpnActivity::class.java)) }
         tvStatus = findViewById(R.id.tvStatus)
         rvServers = findViewById(R.id.rvServers)
         tvTrafficDown = findViewById(R.id.tvTrafficDown)
@@ -624,7 +627,26 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    override fun onResume() {
+        super.onResume()
+        updateUiState(VpnManager.globalStatus)
+        connectTickHandler.post(appScopeTicker)
+    }
+
+    override fun onPause() {
+        connectTickHandler.removeCallbacks(appScopeTicker)
+        super.onPause()
+    }
+
+    private val appScopeTicker = object : Runnable {
+        override fun run() {
+            tvAppVpnStatus.text = appVpnStatusText(AppVpnStorage(this@MainActivity).configuration())
+            connectTickHandler.postDelayed(this, 1000)
+        }
+    }
+
     private fun updateUiState(status: VpnStatus) {
+        tvAppVpnStatus.text = appVpnStatusText(AppVpnStorage(this).configuration())
         tvStatus.text = when (status) {
             VpnStatus.DISCONNECTED -> "Status: DISCONNECTED"
             VpnStatus.CONNECTING -> "Status: CONNECTING..."

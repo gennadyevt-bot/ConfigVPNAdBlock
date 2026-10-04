@@ -29,6 +29,11 @@ class UnifiedVpnService : AndroidVpnService() {
         @Volatile var active: Boolean = false
             private set
 
+        // Immutable snapshot of the Builder lists from the last successful establish().
+        // Never reconstructed from preferences; retained with active=false after close.
+        @Volatile var tunAppScope: AppliedTunAppScope? = null
+            private set
+
         // Результат старта привязан к request_id (ConcurrentHashMap<rid, future>).
         // Старый общий перезаписываемый readyFuture давал гонку: повторный
         // connect() заменял future, первый caller получал timeout через 30с,
@@ -224,14 +229,14 @@ class UnifiedVpnService : AndroidVpnService() {
             b.setSession(name)
             b.setMtu(mtu)
             b.setBlocking(true)
-            val appPrefs = AppVpnStorage(this)
-            if (appPrefs.isEnabled()) {
-                val included = appPrefs.getSelectedPackages()
-                val excluded = appPrefs.getExcludedPackages()
-                if (included.isNotEmpty()) included.forEach { b.addAllowedApplication(it) }
-                else excluded.forEach { b.addDisallowedApplication(it) }
-                AdBlockLog.add("APP_VPN_SCOPE include=${included.size} exclude=${excluded.size}")
-            }
+            val appConfig = AppVpnStorage(this).configuration()
+            val scopeMode = if (appConfig.enabled && appConfig.packages.isNotEmpty()) appConfig.mode else "GLOBAL"
+            val allowed = if (scopeMode == "INCLUDE") appConfig.packages else emptyList()
+            val disallowed = if (scopeMode == "EXCLUDE") appConfig.packages else emptyList()
+            allowed.forEach { b.addAllowedApplication(it) }
+            disallowed.forEach { b.addDisallowedApplication(it) }
+            val scopeDetail = "mode=$scopeMode" + if (scopeMode == "GLOBAL") ""
+                else " apps=" + (allowed + disallowed).joinToString(",")
             addresses.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { a ->
                 val ip: String; val pl: Int
                 if ("/" in a) {
@@ -253,12 +258,15 @@ class UnifiedVpnService : AndroidVpnService() {
                 }
                 b.addRoute(ip, pl)
             }
+            AdBlockLog.add("APP_VPN_SCOPE_APPLY $scopeDetail")
             val tun = b.establish() ?: return failDp("tun establish failed")
 
             val d = Datapath()
             d.tunPfd = tun
             d.appFd = tun.fileDescriptor
             dp = d
+            tunAppScope = AppliedTunAppScope(scopeMode, allowed.toList(), disallowed.toList(), true)
+            AdBlockLog.add("APP_VPN_SCOPE_ACTIVE $scopeDetail")
             val fdA = java.io.FileDescriptor()
             val fdB = java.io.FileDescriptor()
             Os.socketpair(OsConstants.AF_UNIX, OsConstants.SOCK_SEQPACKET, 0, fdA, fdB)
@@ -330,6 +338,7 @@ class UnifiedVpnService : AndroidVpnService() {
         runCatching { Os.close(d.wgLocal) }
         runCatching { d.tunPfd?.close() }
         d.tunPfd = null
+        tunAppScope = tunAppScope?.copy(active = false)
     }
 
     fun currentRx(): Long = dp?.rxBytes ?: 0L
@@ -355,3 +364,7 @@ class UnifiedVpnService : AndroidVpnService() {
         startForeground(NOTIF_ID, notification)
     }
 }
+
+
+data class AppliedTunAppScope(val mode: String, val allowedApps: List<String>,
+    val disallowedApps: List<String>, val active: Boolean)

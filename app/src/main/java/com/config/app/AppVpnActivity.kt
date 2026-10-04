@@ -31,6 +31,7 @@ class AppVpnActivity : AppCompatActivity() {
     private lateinit var rvApps: RecyclerView
     private lateinit var btnSave: Button
     private lateinit var etSearch: EditText
+    private lateinit var tvScopeState: TextView
     private lateinit var tvCounter: TextView
     private lateinit var toggleMode: MaterialButtonToggleGroup
     private lateinit var progressBar: ProgressBar
@@ -54,6 +55,7 @@ class AppVpnActivity : AppCompatActivity() {
         rvApps = findViewById(R.id.rvApps)
         btnSave = findViewById(R.id.btnSave)
         etSearch = findViewById(R.id.etSearch)
+        tvScopeState = findViewById(R.id.tvScopeState)
         tvCounter = findViewById(R.id.tvCounter)
         toggleMode = findViewById(R.id.toggleMode)
         progressBar = findViewById(R.id.progressBar)
@@ -77,7 +79,7 @@ class AppVpnActivity : AppCompatActivity() {
     private fun initAppVpn() {
         val savedSelected = appVpnStorage.getSelectedPackages()
         val savedExcluded = appVpnStorage.getExcludedPackages()
-        isIncludeMode = savedExcluded.isEmpty()
+        isIncludeMode = appVpnStorage.configuration().mode == "INCLUDE"
 
         if (isIncludeMode) {
             selectedPackages.addAll(savedSelected)
@@ -231,8 +233,34 @@ class AppVpnActivity : AppCompatActivity() {
         rvApps.adapter?.notifyDataSetChanged()
     }
 
+    private val statusHandler = Handler(Looper.getMainLooper())
+    private val statusTicker = object : Runnable {
+        override fun run() {
+            val config = appVpnStorage.configuration()
+            val mode = if (config.mode == "INCLUDE") "выбранные приложения через VPN"
+                else "все приложения, кроме выбранных, через VPN"
+            val state = appVpnStatusText(config).removePrefix("App VPN: ")
+            val applied = UnifiedVpnService.tunAppScope
+            val tunState = if (applied?.active == true) applied.mode
+                else if (VpnManager.globalStatus == VpnStatus.CONNECTED) "не подтверждён" else "VPN выключен"
+            tvScopeState.text = "Состояние: $state\nРежим: $mode\nПриложений: ${config.packages.size}\nПрименённый TUN: $tunState"
+            statusHandler.postDelayed(this, 1000)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        statusHandler.post(statusTicker)
+    }
+
+    override fun onPause() {
+        statusHandler.removeCallbacks(statusTicker)
+        super.onPause()
+    }
+
     private fun updateCounter() {
-        tvCounter.text = "Выбрано: ${selectedPackages.size}"
+        tvCounter.text = "Выбрано: ${selectedPackages.size} • " +
+            if (isIncludeMode) "через VPN" else "обход VPN"
     }
 
 }
