@@ -82,7 +82,7 @@ func TestScopedDirect443PreservesRemoteTLS(t *testing.T) {
 		t.Fatal("direct relay leaked after client close")
 	}
 	if counts443["TCP443_DIRECT_ATTEMPT"].Load() != 1 || counts443["TCP443_DIRECT_OK"].Load() != 1 || counts443["TCP443_DIRECT_FAIL"].Load() != 0 || counts443["MITM443_ATTEMPT"].Load() != 0 {
-		t.Fatal(TCP443Diagnostics())
+		t.Fatal(Tcp443Diagnostics())
 	}
 }
 func TestDirect443NoReplyIsFailure(t *testing.T) {
@@ -99,7 +99,7 @@ func TestDirect443NoReplyIsFailure(t *testing.T) {
 		t.Fatal("relay leaked without upstream data")
 	}
 	if counts443["TCP443_DIRECT_OK"].Load() != 0 || counts443["TCP443_DIRECT_FAIL"].Load() != 1 {
-		t.Fatal(TCP443Diagnostics())
+		t.Fatal(Tcp443Diagnostics())
 	}
 }
 
@@ -130,6 +130,6 @@ func TestScopedDirect443StillBlocksSNI(t *testing.T) {
 		t.Fatal("blocked SNI leaked connection")
 	}
 	if counts443["TCP443_DIRECT_ATTEMPT"].Load() != 0 || counts443["MITM443_ATTEMPT"].Load() != 0 {
-		t.Fatal("blocklist did not run before diagnostic dial: " + TCP443Diagnostics())
+		t.Fatal("blocklist did not run before diagnostic dial: " + Tcp443Diagnostics())
 	}
 }

@@ -66,7 +66,7 @@ func ResetTCP443Diagnostics() {
 		n.Store(0)
 	}
 }
-func TCP443Diagnostics() string {
+func Tcp443Diagnostics() string {
 	var s strings.Builder
 	fmt.Fprintf(&s, "direct443=%t", direct443On())
 	for _, name := range stages443 {
