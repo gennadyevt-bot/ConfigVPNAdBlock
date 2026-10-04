@@ -12,6 +12,9 @@ android {
         targetSdk = 36
         versionCode = 74
         versionName = "6.0.0-alpha74"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     signingConfigs {

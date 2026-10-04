@@ -24,12 +24,22 @@ jobs:
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
-          cd mitm && go mod tidy && go test -v -timeout 90s ./... && go get golang.org/x/mobile && gomobile bind -target android -androidapi 26 -o mitm.aar .
+          cd mitm && go mod tidy && go test -v -timeout 90s ./... && go get golang.org/x/mobile && gomobile bind -target android/arm64 -androidapi 26 -o mitm.aar .
       - name: Put AAR into app
         run: |
           mkdir -p app/libs
           cp mitm/mitm.aar app/libs/mitm.aar
       - run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+      - name: Verify arm64-only APK
+        run: |
+          python3 - <<'PYAPK'
+          import glob, zipfile
+          apk, = glob.glob('app/build/outputs/apk/release/*.apk')
+          with zipfile.ZipFile(apk) as z:
+              abis = {name.split('/')[1] for name in z.namelist() if name.startswith('lib/') and name.endswith('.so')}
+          assert abis == {'arm64-v8a'}, f'Unexpected APK ABIs: {abis}'
+          print(f'APK native ABIs verified: {sorted(abis)}')
+          PYAPK
       - uses: actions/upload-artifact@v4
         with:
           name: cvab-release-apk
