@@ -220,6 +220,7 @@ func (c *tunCounter) Read(p []byte) (int, error) {
 			atomic.AddInt64(&tunRxPkts, 1)
 			atomic.AddInt64(&tunRxBytes, int64(n))
 			analyzeTunPkt(p[:n])
+			raw443ObserveTunPacket(p[:n], false)
 			if c.fast != nil && c.fast.Outbound(p[:n]) {
 				if err != nil {
 					return 0, err
@@ -236,6 +237,7 @@ func (c *tunCounter) Write(p []byte) (int, error) {
 	if n > 0 {
 		atomic.AddInt64(&tunTxPkts, 1)
 		atomic.AddInt64(&tunTxBytes, int64(n))
+		raw443ObserveTunPacket(p[:n], true)
 	}
 	return n, err
 }
@@ -1165,7 +1167,12 @@ func handle443(conn adapter.TCPConn, hp string) {
 	rawInclude := raw443Include.Load()
 	rawCounters := raw443Current.Load()
 	diagnostic := !rawInclude && diagnostic443For(conn)
+	var rawFlow *raw443Flow
 	if rawInclude {
+		rawFlow = &raw443Flow{counts: rawCounters, dst: hp, fid: fid}
+		rawFlow.begin()
+		raw443AttachPackets(rawFlow, conn.ID())
+		defer func() { rawFlow.finish(closeReason) }()
 		flowLog(fmt.Sprintf("TCP443_RAW_ENTER id=%d dst=%s stage=client_hello", fid, hp))
 	}
 	if diagnostic {
@@ -1212,7 +1219,14 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// --- Этап 1 (GPT): raw-peek ClientHello ДО TLS. Клиент, предлагающий
 	// только h2 (без http/1.1), идёт в direct/protected relay без
 	// расшифровки — ни одного alert'а, интернет не пропадает.
-	raw, peekSNI, alpn, perr := peekClientHello(conn)
+	var peekConn net.Conn = conn
+	if rawFlow != nil {
+		peekConn = raw443PeekConn{conn, rawFlow}
+	}
+	raw, peekSNI, alpn, perr := peekClientHello(peekConn)
+	if rawFlow != nil {
+		rawFlow.setHost(peekSNI)
+	}
 	h1ok := false
 	for _, p := range alpn {
 		if p == "http/1.1" {
@@ -1276,7 +1290,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		return
 	}
 	if rawInclude {
-		closeReason = raw443ThroughWG(conn, hp, peekSNI, raw, fid, rawCounters)
+		closeReason = raw443Run(conn, raw, rawFlow)
 		return
 	}
 	if diagnostic {
