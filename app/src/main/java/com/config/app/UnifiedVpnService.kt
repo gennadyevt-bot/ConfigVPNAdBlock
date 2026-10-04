@@ -313,6 +313,7 @@ class UnifiedVpnService : AndroidVpnService() {
         mitm.Mitm.resetTCP443Diagnostics()
         val rawInclude = mode == "INCLUDE" && allowed.isNotEmpty()
         mitm.Mitm.setTcp443RawInclude(rawInclude)
+        mitm.Mitm.setQuicIncludeDiagnostic(mode, allowed.joinToString(","))
         tcp443DiagnosticScope = if (rawInclude) "RAW_INCLUDE_DIAG" else "OFF"
         AdBlockLog.add("TCP443_MODE mode=" + (if (rawInclude) "RAW_INCLUDE_DIAG" else "NORMAL") +
             " tunAppScope=$mode DNS_SNI_BLOCK_ON WG_ONLY")
@@ -330,7 +331,7 @@ class UnifiedVpnService : AndroidVpnService() {
         // a different service instance.
         val d = dp ?: return
         active = false
-        runCatching { mitm.Mitm.setTcp443RawInclude(false); mitm.Mitm.setDirect443(false); mitm.Mitm.setDirect443Scope(null) }
+        runCatching { mitm.Mitm.stopQuicIncludeDiagnostic(); mitm.Mitm.setTcp443RawInclude(false); mitm.Mitm.setDirect443(false); mitm.Mitm.setDirect443Scope(null) }
         tcp443DiagnosticScope = "OFF"
         AdBlockLog.add("DATAPATH_STOP reason=$reason")
         runCatching {

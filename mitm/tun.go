@@ -209,8 +209,9 @@ var (
 // tunCounter считает пакеты/байты на TUN fd и разбирает IP-заголовок
 // первых ~20 пакетов сессии (без payload).
 type tunCounter struct {
-	f    *os.File
-	fast *quicfast.Router
+	f        *os.File
+	fast     *quicfast.Router
+	quicDiag *quicIncludeDropSession
 }
 
 func (c *tunCounter) Read(p []byte) (int, error) {
@@ -221,6 +222,12 @@ func (c *tunCounter) Read(p []byte) (int, error) {
 			atomic.AddInt64(&tunRxBytes, int64(n))
 			analyzeTunPkt(p[:n])
 			raw443ObserveTunPacket(p[:n], false)
+			if c.quicDiag.outbound(p[:n]) {
+				if err != nil {
+					return 0, err
+				}
+				continue
+			}
 			if c.fast != nil && c.fast.Outbound(p[:n]) {
 				if err != nil {
 					return 0, err
@@ -327,7 +334,7 @@ func StartTunnel(fd int64, mtu int64) error {
 		return err
 	}
 	f := os.NewFile(uintptr(fd), "tun")
-	counter := &tunCounter{f: f}
+	counter := &tunCounter{f: f, quicDiag: quicIncludeCurrent.Load()}
 	attachQuicFastPath(counter)
 	started := false
 	defer func() {

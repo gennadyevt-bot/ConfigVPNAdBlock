@@ -406,6 +406,7 @@ func raw443Run(client net.Conn, prefix []byte, f *raw443Flow) string {
 		f.fail("session_replaced", "stage=before_wg_dial")
 		return "rawSessionReplaced"
 	}
+	tcp443AfterQuicDrop(f)
 	upstream, err := wgDialTCP(dst)
 	if err != nil {
 		f.fail("dial_error", "stage=wg_dial err="+err.Error())
