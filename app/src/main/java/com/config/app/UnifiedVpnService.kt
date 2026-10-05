@@ -305,17 +305,17 @@ class UnifiedVpnService : AndroidVpnService() {
         }
     }
 
-    // alpha74 experiment uses the Builder scope that successfully established
+    // alpha77 experiment uses the Builder scope that successfully established
     // this TUN; Android already restricts which applications can enter it.
     private fun configureTCP443Diagnostic(mode: String, allowed: List<String>) {
         mitm.Mitm.setDirect443(false)
         mitm.Mitm.setDirect443Scope(null)
         mitm.Mitm.resetTCP443Diagnostics()
-        val rawInclude = mode == "INCLUDE" && allowed.isNotEmpty()
-        mitm.Mitm.setTcp443RawInclude(rawInclude)
+        val includeScope = mode == "INCLUDE" && allowed.isNotEmpty()
+        mitm.Mitm.setTcp443RawInclude(false)
         mitm.Mitm.setQuicIncludeDiagnostic(mode, allowed.joinToString(","))
-        tcp443DiagnosticScope = if (rawInclude) "RAW_INCLUDE_DIAG" else "OFF"
-        AdBlockLog.add("TCP443_MODE mode=" + (if (rawInclude) "RAW_INCLUDE_DIAG" else "NORMAL") +
+        tcp443DiagnosticScope = if (includeScope) "NORMAL_TCP_QUIC_DROP_DIAG" else "OFF"
+        AdBlockLog.add("TCP443_MODE mode=" + (if (includeScope) "NORMAL_TCP_QUIC_DROP_DIAG" else "NORMAL") +
             " tunAppScope=$mode DNS_SNI_BLOCK_ON WG_ONLY")
     }
 
