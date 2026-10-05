@@ -44,6 +44,11 @@ func SafeTLSFlows() string {
 }
 
 type safeTLSSummary struct {
+	HalfCloseClient    string `json:"halfCloseClient"`
+	HalfCloseUpstream  string `json:"halfCloseUpstream"`
+	ClientWriteError   string `json:"clientWriteError"`
+	UpstreamWriteError string `json:"upstreamWriteError"`
+
 	TunPackets int64  `json:"tunPacketsToApp"`
 	TunPayload int64  `json:"tunPayloadBytesToApp"`
 	TunLastAt  int64  `json:"tunLastWriteAt"`
@@ -214,6 +219,13 @@ func (c *safeTLSConn) Write(p []byte) (int, error) {
 	n, e := c.Conn.Write(p)
 	c.f.sent(!c.client, n)
 	if e != nil {
+		c.f.mu.Lock()
+		if c.client {
+			c.f.v.ClientWriteError = e.Error()
+		} else {
+			c.f.v.UpstreamWriteError = e.Error()
+		}
+		c.f.mu.Unlock()
 		c.f.event(!c.client, "WRITE_ERROR", fmt.Sprintf("err=%q", e.Error()))
 	}
 	return n, e

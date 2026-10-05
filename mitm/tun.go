@@ -1286,7 +1286,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		if diag {
 			relay443Diagnostic(conn, up, peekSNI, hp)
 		} else {
-			relay(&safeTLSConn{Conn: conn, f: observation, client: true}, &safeTLSConn{Conn: up, f: observation})
+			closeReason = relaySafeTLS(conn, up, observation)
 		}
 	}
 	// SAFE MODE: HTTPS не расшифровываем и не подменяем сертификаты.
