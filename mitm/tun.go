@@ -1306,6 +1306,14 @@ func handle443(conn adapter.TCPConn, hp string) {
 		return
 	}
 	tcp443AfterQuicDropMetadata(peekSNI, hp)
+	// Browser trust failures cannot be repaired by replaying a ClientHello
+	// after TLS has already sent a substituted certificate. Preserve end-to-end
+	// TLS from the first connection in browser-only TUNs, after SNI blocking.
+	if browserCompatibility.Load() {
+		flowLog(fmt.Sprintf("#%d BROWSER_TLS_PASSTHROUGH sni=%q dst=%s", fid, peekSNI, hp))
+		goDirect("BROWSER_TLS_PASSTHROUGH")
+		return
+	}
 	if diagnostic {
 		flowLog(fmt.Sprintf("TCP443_DIAG_BYPASS_MITM sni=%q dst=%s", peekSNI, hp))
 		goDirect("TCP443_DIAGNOSTIC")

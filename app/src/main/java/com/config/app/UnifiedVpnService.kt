@@ -305,17 +305,21 @@ class UnifiedVpnService : AndroidVpnService() {
         }
     }
 
-    // alpha77 experiment uses the Builder scope that successfully established
-    // this TUN; Android already restricts which applications can enter it.
+    // Use the Builder scope that successfully established this TUN.
+    // Browser-only scopes preserve remote TLS and normal QUIC transport.
     private fun configureTCP443Diagnostic(mode: String, allowed: List<String>) {
         mitm.Mitm.setDirect443(false)
         mitm.Mitm.setDirect443Scope(null)
         mitm.Mitm.resetTCP443Diagnostics()
         val includeScope = mode == "INCLUDE" && allowed.isNotEmpty()
         mitm.Mitm.setTcp443RawInclude(false)
-        mitm.Mitm.setQuicIncludeDiagnostic(mode, allowed.joinToString(","))
-        tcp443DiagnosticScope = if (includeScope) "NORMAL_TCP_QUIC_DROP_DIAG" else "OFF"
-        AdBlockLog.add("TCP443_MODE mode=" + (if (includeScope) "NORMAL_TCP_QUIC_DROP_DIAG" else "NORMAL") +
+        mitm.Mitm.setBrowserCompatibility(mode, allowed.joinToString(","))
+        mitm.Mitm.setQuicIncludeDiagnostic("OFF", "")
+        val browserScope = includeScope && allowed.all {
+            it == "com.android.chrome" || it == "com.google.android.googlequicksearchbox"
+        }
+        tcp443DiagnosticScope = if (browserScope) "BROWSER_TLS_PASSTHROUGH" else "OFF"
+        AdBlockLog.add("TCP443_MODE mode=" + (if (browserScope) "BROWSER_TLS_PASSTHROUGH" else "NORMAL") +
             " tunAppScope=$mode DNS_SNI_BLOCK_ON WG_ONLY")
     }
 
@@ -331,7 +335,7 @@ class UnifiedVpnService : AndroidVpnService() {
         // a different service instance.
         val d = dp ?: return
         active = false
-        runCatching { mitm.Mitm.stopQuicIncludeDiagnostic(); mitm.Mitm.setTcp443RawInclude(false); mitm.Mitm.setDirect443(false); mitm.Mitm.setDirect443Scope(null) }
+        runCatching { mitm.Mitm.setBrowserCompatibility("OFF", ""); mitm.Mitm.stopQuicIncludeDiagnostic(); mitm.Mitm.setTcp443RawInclude(false); mitm.Mitm.setDirect443(false); mitm.Mitm.setDirect443Scope(null) }
         tcp443DiagnosticScope = "OFF"
         AdBlockLog.add("DATAPATH_STOP reason=$reason")
         runCatching {
