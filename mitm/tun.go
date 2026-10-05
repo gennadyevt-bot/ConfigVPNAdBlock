@@ -1244,6 +1244,8 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// dst:443, реплей захваченного ClientHello, raw relay. Никакого
 	// TLS с нашей стороны — клиент не видит ни alert'ов, ни наших cert.
 	goDirect := func(tag string) {
+		observation := newSafeTLSFlow(fid, peekSNI, hp, raw)
+		defer func() { observation.finish(closeReason) }()
 		diag := tag == "TCP443_DIAGNOSTIC"
 		if diag {
 			stage443("TCP443_DIRECT_ATTEMPT", peekSNI, "dst="+hp+" stage=dial")
@@ -1265,7 +1267,9 @@ func handle443(conn adapter.TCPConn, hp string) {
 			return
 		}
 		if len(raw) > 0 {
-			if _, werr := up.Write(raw); werr != nil {
+			n, werr := up.Write(raw)
+			observation.sent(true, n)
+			if werr != nil {
 				atomic.AddInt64(&directFailN, 1)
 				if diag {
 					stage443("TCP443_DIRECT_FAIL", peekSNI, fmt.Sprintf("dst=%s stage=client_hello_write err=%v", hp, werr))
@@ -1281,7 +1285,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		if diag {
 			relay443Diagnostic(conn, up, peekSNI, hp)
 		} else {
-			relay(conn, up)
+			relay(&safeTLSConn{Conn: conn, f: observation, client: true}, &safeTLSConn{Conn: up, f: observation})
 		}
 	}
 	// SAFE MODE: HTTPS не расшифровываем и не подменяем сертификаты.
@@ -1300,6 +1304,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 		closeReason = raw443Run(conn, raw, rawFlow)
 		return
 	}
+	tcp443AfterQuicDropMetadata(peekSNI, hp)
 	if diagnostic {
 		flowLog(fmt.Sprintf("TCP443_DIAG_BYPASS_MITM sni=%q dst=%s", peekSNI, hp))
 		goDirect("TCP443_DIAGNOSTIC")

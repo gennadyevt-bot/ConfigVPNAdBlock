@@ -62,6 +62,7 @@ func stage443(stage, host, detail string) {
 	flowLog(fmt.Sprintf("%s sni=%q %s", stage, host, detail))
 }
 func ResetTCP443Diagnostics() {
+	resetSafeTLS()
 	for _, n := range counts443 {
 		n.Store(0)
 	}

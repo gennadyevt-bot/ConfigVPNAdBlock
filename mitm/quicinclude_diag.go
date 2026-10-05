@@ -150,11 +150,15 @@ func (s *quicIncludeDropSession) outbound(b []byte) bool {
 	return true
 }
 func tcp443AfterQuicDrop(f *raw443Flow) {
+	tcp443AfterQuicDropMetadata(f.snapshot().SNI, f.dst)
+}
+
+func tcp443AfterQuicDropMetadata(sni, dst string) {
 	s := quicIncludeCurrent.Load()
 	if s == nil || !s.active.Load() {
 		return
 	}
-	host, _, err := net.SplitHostPort(f.dst)
+	host, _, err := net.SplitHostPort(dst)
 	if err != nil {
 		return
 	}
@@ -177,5 +181,5 @@ func tcp443AfterQuicDrop(f *raw443Flow) {
 		return
 	}
 	s.lastTCP.Store(now.UnixMilli())
-	flowLog(fmt.Sprintf("TCP443_AFTER_QUIC_DROP sni=%q dst=%s timeSinceLastQuicDropMs=%d correlation=%s", f.snapshot().SNI, f.dst, now.Sub(last).Milliseconds(), correlation))
+	flowLog(fmt.Sprintf("TCP443_AFTER_QUIC_DROP sni=%q dst=%s timeSinceLastQuicDropMs=%d correlation=%s", sni, dst, now.Sub(last).Milliseconds(), correlation))
 }

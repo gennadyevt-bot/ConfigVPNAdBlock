@@ -63,6 +63,12 @@ class AdBlockJournalActivity : AppCompatActivity() {
             sb.append("ca.crt=").append(File(filesDir, "ca.crt").exists()).append("\n")
             sb.append("ca.key=").append(File(filesDir, "ca.key").exists()).append("\n")
             sb.append("ourCA_fp=").append(timed { sha256Hex(File(filesDir, "ca.crt").readBytes()) }).append("\n")
+            sb.append("fileCA_derSHA256=").append(timed {
+                val cert = File(filesDir, "ca.crt").inputStream().use { java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(it) }
+                sha256Hex(cert.encoded)
+            }).append("\n")
+            sb.append("activeCA_derSHA256=").append(timed { mitm.Mitm.activeCAFingerprint() }).append("\n")
+            sb.append("safeTLSFlows=").append(timed { mitm.Mitm.safeTLSFlows() }).append("\n")
             sb.append("caTrustScan=").append(timed { trustScan() }).append("\n")
             sb.append("\n=== NATIVE STATUS ===\n")
             sb.append("packetVPNStats=").append(timed { mitm.Mitm.packetVPNStats() }).append("\n")
