@@ -380,6 +380,7 @@ type browserPacketSession struct {
 	tx, rx, drop atomic.Uint64
 	active       atomic.Bool
 	filter       browserPacketFilter
+	diagnostic   browserDiagnostic
 }
 
 var browserPackets atomic.Pointer[browserPacketSession]
@@ -435,10 +436,15 @@ func (s *browserPacketSession) copyPackets(outbound bool) {
 			atomic.AddInt64(&tunRxPkts, 1)
 			atomic.AddInt64(&tunRxBytes, int64(n))
 			analyzeTunPkt(b[:n])
-			if s.filter.outbound(b[:n]) {
+			blocked := s.filter.outbound(b[:n])
+			s.diagnostic.observe(b[:n], true, blocked)
+			if blocked {
 				s.drop.Add(1)
 				continue
 			}
+		}
+		if !outbound {
+			s.diagnostic.observe(b[:n], false, false)
 		}
 		w, e := dst.Write(b[:n])
 		if e != nil || w != n {
@@ -465,5 +471,5 @@ func BrowserPacketStats() string {
 	if s == nil {
 		return "browserPackets: none"
 	}
-	return fmt.Sprintf("browserPackets active=%t tx=%d rx=%d blockedPackets=%d", s.active.Load(), s.tx.Load(), s.rx.Load(), s.drop.Load())
+	return fmt.Sprintf("browserPackets active=%t tx=%d rx=%d blockedPackets=%d", s.active.Load(), s.tx.Load(), s.rx.Load(), s.drop.Load()) + " flows=" + s.diagnostic.snapshot()
 }
