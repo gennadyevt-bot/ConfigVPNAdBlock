@@ -24,7 +24,6 @@ type DiagnosticHello struct {
 func (d *DiagnosticHello) Inspect(payload []byte) string {
 	if cid := initialConnectionID(payload); len(cid) > 0 && !bytes.Equal(cid, d.cid) {
 		d.h = hello{}
-		d.host = ""
 		d.cid = append(d.cid[:0], cid...)
 	}
 	host, _ := d.h.inspect(payload)
@@ -34,5 +33,7 @@ func (d *DiagnosticHello) Inspect(payload []byte) string {
 	return host
 }
 
-// CurrentHost retains the name for short-header packets and resets it on a new Initial CID.
+// CurrentHost retains the last authenticated name until a new ClientHello is
+// decoded. A changed CID alone cannot erase a blocking decision: Retry or an
+// incomplete/invalid Initial may change it before a hostname is available.
 func (d *DiagnosticHello) CurrentHost(payload []byte) string { d.Inspect(payload); return d.host }

@@ -62,7 +62,7 @@ class UnifiedVpnService : AndroidVpnService() {
         fun buildWgQuick(s: ServerInfo, awg: Boolean = false): String = buildString {
             append("[Interface]\nPrivateKey = ").append(s.interfacePrivateKey).append('\n')
             if (s.interfaceAddress.isNotEmpty()) append("Address = ").append(s.interfaceAddress).append('\n')
-            if (s.interfaceDns.isNotEmpty()) append("DNS = ").append(s.interfaceDns).append('\n')
+            append("DNS = ").append(VpnManager.sanitizeDns(s.interfaceDns, s.interfaceAddress)).append('\n')
             s.interfaceMtu.toIntOrNull()?.let { if (it in 576..65535) append("MTU = ").append(it).append('\n') }
             if (awg) {
                 listOf("Jc" to s.jc, "Jmin" to s.jmin, "Jmax" to s.jmax,
@@ -91,7 +91,7 @@ class UnifiedVpnService : AndroidVpnService() {
                 .putExtra("wgquick", buildWgQuick(server, awg))
                 .putExtra("awg", awg)
                 .putExtra("addresses", server.interfaceAddress)
-                .putExtra("dns", server.interfaceDns)
+                .putExtra("dns", VpnManager.sanitizeDns(server.interfaceDns, server.interfaceAddress))
                 .putExtra("mtu", server.interfaceMtu)
                 .putExtra("routes", VpnManager.buildAllowedIPs(server))
             context.startService(i)
@@ -232,6 +232,10 @@ class UnifiedVpnService : AndroidVpnService() {
             b.setSession(name)
             b.setMtu(mtu)
             b.setBlocking(true)
+            // Match GoBackend: Google/Discover must see the same VPN network capabilities.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setMetered(false)
+            setUnderlyingNetworks(null)
+            AdBlockLog.add("VPN_NETWORK_POLICY metered=false underlying=automatic dns=$dns mtu=$mtu")
             val appConfig = AppVpnStorage(this).configuration()
             val scopeMode = if (appConfig.enabled && appConfig.packages.isNotEmpty()) appConfig.mode else "GLOBAL"
             val allowed = if (scopeMode == "INCLUDE") appConfig.packages else emptyList()

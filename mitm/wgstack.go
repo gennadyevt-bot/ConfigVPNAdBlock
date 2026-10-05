@@ -58,7 +58,8 @@ func WgUpstreamStats() string {
 	defer wgUpstreamMu.RUnlock()
 	if wgUpstream == nil {
 		if browserPackets.Load() != nil {
-			return BrowserPacketStats()
+			trace := packetTraceRef()
+			return BrowserPacketStats() + " " + trace.Stats() + " " + trace.IOStatus()
 		}
 		return "upstream: stopped"
 	}

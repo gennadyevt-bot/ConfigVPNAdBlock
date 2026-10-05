@@ -146,8 +146,15 @@ func TestBrowserPacketDNSAndQUIC(t *testing.T) {
 					t.Fatal("blocked short header passed")
 				}
 				raw[6] ^= 1
-				if f.outbound(includeUDP(v6, 443, raw)) {
-					t.Fatal("new unauthenticatable CID inherited block")
+				if !f.outbound(includeUDP(v6, 443, raw)) {
+					t.Fatal("new unauthenticatable CID erased block")
+				}
+				allowed, err := os.ReadFile("internal/quicfast/testdata/" + strings.Replace(fixture, "blocked", "google", 1) + ".bin")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if f.outbound(includeUDP(v6, 443, allowed)) {
+					t.Fatal("authenticated new allowed hostname inherited block")
 				}
 			}
 		}

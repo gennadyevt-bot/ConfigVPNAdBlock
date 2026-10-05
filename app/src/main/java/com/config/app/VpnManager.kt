@@ -300,17 +300,6 @@ class VpnManager private constructor(private val context: Context) {
     fun getStatus(): VpnStatus = globalStatus
     fun getCurrentServer(): ServerInfo? = currentServer
 
-    private fun hasIPv6Address(address: String): Boolean {
-        return address.split(',').any { it.trim().contains(':') }
-    }
-
-    private fun sanitizeDns(dns: String, interfaceAddress: String): String {
-        val entries = dns.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        val v6 = hasIPv6Address(interfaceAddress)
-        val cleaned = entries.filter { !it.contains(':') || v6 }
-        return if (cleaned.isEmpty()) "1.1.1.1" else cleaned.joinToString(", ")
-    }
-
     // Замер путей после подключения: TCP-connect к 1.1.1.1 (контроль) и к
     // датацентрам Telegram (149.154.167.50, 91.108.56.130). Каждый результат —
     // ОТДЕЛЬНЫЙ короткий тост (длинный обрезается Android, цифры не видно).
@@ -365,6 +354,14 @@ class VpnManager private constructor(private val context: Context) {
 
         fun destroyInstance() {
             instance = null
+        }
+
+        // Shared by the backend and unified TUN so DNS follows the same address families.
+        fun sanitizeDns(dns: String, interfaceAddress: String): String {
+            val entries = dns.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            val v6 = interfaceAddress.split(',').any { it.trim().contains(':') }
+            val cleaned = entries.filter { !it.contains(':') || v6 }
+            return if (cleaned.isEmpty()) "1.1.1.1" else cleaned.joinToString(", ")
         }
 
         fun buildAllowedIPs(server: ServerInfo): String {
