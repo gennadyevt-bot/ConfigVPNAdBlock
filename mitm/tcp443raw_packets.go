@@ -43,7 +43,7 @@ func raw443DetachPackets(f *raw443Flow) {
 func raw443ObserveTunPacket(p []byte, toApp bool) {
 	// Fast exit when no diagnostic flow exists. Never intercept or mutate packets.
 	raw443PacketFlows.RLock()
-	if len(raw443PacketFlows.flows) == 0 {
+	if len(raw443PacketFlows.flows) == 0 && !safeTLSHasPackets() {
 		raw443PacketFlows.RUnlock()
 		return
 	}
@@ -92,6 +92,7 @@ func raw443ObserveTunPacket(p []byte, toApp bool) {
 	raw443PacketFlows.RLock()
 	f := raw443PacketFlows.flows[raw443PacketKey(a, d)]
 	raw443PacketFlows.RUnlock()
+	safeTLSObservePacket(raw443PacketKey(a, d), h, hlen, toApp)
 	if f == nil {
 		return
 	}

@@ -44,6 +44,20 @@ func SafeTLSFlows() string {
 }
 
 type safeTLSSummary struct {
+	TunPackets int64  `json:"tunPacketsToApp"`
+	TunPayload int64  `json:"tunPayloadBytesToApp"`
+	TunLastAt  int64  `json:"tunLastWriteAt"`
+	AppACKs    int64  `json:"appACKCount"`
+	AppACKAt   int64  `json:"appLastACKAt"`
+	AppACK     uint32 `json:"appLastACK"`
+	AppWindow  uint16 `json:"appWindowRaw"`
+	TunDataEnd uint32 `json:"tunDataEndSeq"`
+	Pending    int64  `json:"tcpUnackedBytes"`
+	AppRST     bool   `json:"appRST"`
+	TunRST     bool   `json:"tunRST"`
+	AppFIN     bool   `json:"appFIN"`
+	TunFIN     bool   `json:"tunFIN"`
+
 	ClientReads         int64  `json:"clientReads"`
 	ServerReads         int64  `json:"serverReads"`
 	LastClientReadAt    int64  `json:"lastClientReadAt"`
@@ -67,13 +81,16 @@ type safeTLSSummary struct {
 	Reason              string `json:"reason"`
 }
 type safeTLSFlow struct {
+	packetKey      string
+	dataSeen       bool
+	ackSeen        bool
 	mu             sync.Mutex
 	v              safeTLSSummary
 	client, server tlsRecordObserver
 }
 
 func newSafeTLSFlow(id int64, host, dst string, raw []byte) *safeTLSFlow {
-	f := &safeTLSFlow{v: safeTLSSummary{ID: id, SNI: host, Dst: dst, StartAt: time.Now().UnixMilli()}}
+	f := &safeTLSFlow{v: safeTLSSummary{ID: id, SNI: host, Dst: dst, Pending: -1, StartAt: time.Now().UnixMilli()}}
 	f.client.emit = func(event, detail string) { f.event(true, event, detail) }
 	f.server.emit = func(event, detail string) { f.event(false, event, detail) }
 	s := safeTLSSessions.Load()
@@ -151,6 +168,7 @@ func (f *safeTLSFlow) end(client bool, err error) {
 	f.event(client, "READ_END", fmt.Sprintf("err=%q", err.Error()))
 }
 func (f *safeTLSFlow) finish(reason string) {
+	safeTLSDetachPackets(f)
 	f.mu.Lock()
 	f.v.EndAt = time.Now().UnixMilli()
 	f.v.DurationMs = f.v.EndAt - f.v.StartAt

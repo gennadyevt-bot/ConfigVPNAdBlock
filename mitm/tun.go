@@ -1245,6 +1245,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// TLS с нашей стороны — клиент не видит ни alert'ов, ни наших cert.
 	goDirect := func(tag string) {
 		observation := newSafeTLSFlow(fid, peekSNI, hp, raw)
+		safeTLSAttachPackets(observation, conn.ID())
 		defer func() { observation.finish(closeReason) }()
 		diag := tag == "TCP443_DIAGNOSTIC"
 		if diag {
