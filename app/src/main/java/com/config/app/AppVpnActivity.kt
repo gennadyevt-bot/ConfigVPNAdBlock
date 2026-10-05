@@ -240,7 +240,7 @@ class AppVpnActivity : AppCompatActivity() {
             val mode = if (config.mode == "INCLUDE") "выбранные приложения через VPN"
                 else "все приложения, кроме выбранных, через VPN"
             val state = appVpnStatusText(config).removePrefix("App VPN: ")
-            val applied = UnifiedVpnService.tunAppScope
+            val applied = appliedAppVpnScope()
             val tunState = if (applied?.active == true) applied.mode
                 else if (VpnManager.globalStatus == VpnStatus.CONNECTED) "не подтверждён" else "VPN выключен"
             tvScopeState.text = "Состояние: $state\nРежим: $mode\nПриложений: ${config.packages.size}\nПрименённый TUN: $tunState"

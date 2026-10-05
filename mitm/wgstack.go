@@ -57,6 +57,9 @@ func WgUpstreamStats() string {
 	wgUpstreamMu.RLock()
 	defer wgUpstreamMu.RUnlock()
 	if wgUpstream == nil {
+		if browserPackets.Load() != nil {
+			return BrowserPacketStats()
+		}
 		return "upstream: stopped"
 	}
 	rawStats := ""

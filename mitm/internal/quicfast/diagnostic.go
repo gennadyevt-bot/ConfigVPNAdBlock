@@ -16,15 +16,23 @@ func DiagnosticUDP443(b []byte) (client, dst netip.AddrPort, payload []byte, ok 
 }
 
 type DiagnosticHello struct {
-	h   hello
-	cid []byte
+	h    hello
+	cid  []byte
+	host string
 }
 
 func (d *DiagnosticHello) Inspect(payload []byte) string {
 	if cid := initialConnectionID(payload); len(cid) > 0 && !bytes.Equal(cid, d.cid) {
 		d.h = hello{}
+		d.host = ""
 		d.cid = append(d.cid[:0], cid...)
 	}
 	host, _ := d.h.inspect(payload)
+	if host != "" {
+		d.host = host
+	}
 	return host
 }
+
+// CurrentHost retains the name for short-header packets and resets it on a new Initial CID.
+func (d *DiagnosticHello) CurrentHost(payload []byte) string { d.Inspect(payload); return d.host }

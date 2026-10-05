@@ -187,6 +187,7 @@ class VpnManager private constructor(private val context: Context) {
         }
         val t0 = System.currentTimeMillis()
         wgBackend.setState(tunnel, WgBackendTunnel.State.UP, config)
+        publishBackendScope(config.`interface`.includedApplications.toList(), config.`interface`.excludedApplications.toList())
         android.util.Log.d("ConfigVPN", "WG handshake: ${System.currentTimeMillis() - t0} ms")
         dbg("WG up: " + (System.currentTimeMillis() - t0) + " ms")
 
@@ -216,6 +217,7 @@ class VpnManager private constructor(private val context: Context) {
 
             val t0 = System.currentTimeMillis()
             awgBackend.setState(AwgTunnel.getInstance(), AwgBackendTunnel.State.UP, config)
+            publishBackendScope(config.`interface`.includedApplications.toList(), config.`interface`.excludedApplications.toList())
             android.util.Log.d("ConfigVPN", "AWG handshake: ${System.currentTimeMillis() - t0} ms")
 
             warnIfNoTraffic {
@@ -349,6 +351,8 @@ class VpnManager private constructor(private val context: Context) {
 
     companion object {
         var globalStatus: VpnStatus = VpnStatus.DISCONNECTED
+        @Volatile var backendAppScope: AppliedTunAppScope? = null
+            private set
 
         @Volatile
         private var instance: VpnManager? = null
@@ -413,7 +417,14 @@ class VpnManager private constructor(private val context: Context) {
         }
     }
 
+    private fun publishBackendScope(allowed: List<String>, disallowed: List<String>) {
+        val mode = if (allowed.isNotEmpty()) "INCLUDE" else if (disallowed.isNotEmpty()) "EXCLUDE" else "GLOBAL"
+        backendAppScope = AppliedTunAppScope(mode, allowed, disallowed, true)
+        AdBlockLog.add("APP_VPN_SCOPE_ACTIVE backend=" + (if (usingAwg) "AWG" else "WG") + " mode=$mode apps=" + (allowed + disallowed).joinToString(","))
+    }
+
     private fun updateStatus(status: VpnStatus) {
+        if (status != VpnStatus.CONNECTED) backendAppScope = null
         globalStatus = status
         onStatusChanged?.invoke(status)
     }

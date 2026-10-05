@@ -46,7 +46,7 @@ class AdBlockJournalActivity : AppCompatActivity() {
             sb.append("vpnStatus=").append(VpnManager.globalStatus).append("\n")
             sb.append("datapathActive=").append(UnifiedVpnService.active).append("\n")
             val appConfig = AppVpnStorage(this).configuration()
-            val tunScope = UnifiedVpnService.tunAppScope
+            val tunScope = appliedAppVpnScope()
             sb.append("appVpnEnabled=").append(appConfig.enabled).append("\n")
             sb.append("appVpnMode=").append(appConfig.mode).append("\n")
             sb.append("appVpnApps=").append(appConfig.packages.size).append("\n")

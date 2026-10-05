@@ -75,10 +75,14 @@ class AppVpnStorage(context: Context) {
 data class AppVpnConfiguration(val enabled: Boolean, val mode: String,
     val packages: List<String>, val serverId: String)
 
-// Displays applied scope when a unified TUN exists, rather than claiming that
+fun appliedAppVpnScope(): AppliedTunAppScope? =
+    UnifiedVpnService.tunAppScope?.takeIf { UnifiedVpnService.active && it.active }
+        ?: VpnManager.backendAppScope
+
+// Displays applied scope when a TUN exists, rather than claiming that
 // saved settings are already active during a rebuild or a disconnected VPN.
 fun appVpnStatusText(config: AppVpnConfiguration): String {
-    val applied = UnifiedVpnService.tunAppScope
+    val applied = appliedAppVpnScope()
     val connected = VpnManager.globalStatus == VpnStatus.CONNECTED
     if (connected && applied?.active == true) {
         if (applied.mode != "GLOBAL") {

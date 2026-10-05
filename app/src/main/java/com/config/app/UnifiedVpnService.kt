@@ -289,10 +289,16 @@ class UnifiedVpnService : AndroidVpnService() {
             AdBlockLog.add("UNIFIED_NATIVE_UP mode=" + if (awg) "AWG" else "WG")
             val wgAddr = addresses.split(",").firstOrNull { it.trim().isNotEmpty() }
                 ?.trim()?.substringBefore("/") ?: return failDp("VPN address missing")
-            // Pass one owned descriptor at a time; native startup closes it on failure.
-            val wgDns = Regex("(?im)^\\s*DNS\\s*=\\s*([0-9A-Fa-f.:]+)").find(wgquick)?.groupValues?.get(1) ?: ""
-            mitm.Mitm.setWgUpstream(ParcelFileDescriptor.dup(d.wgLocal).detachFd().toLong(), mtu.toLong(), wgAddr, wgDns)
-            mitm.Mitm.startTunnel(ParcelFileDescriptor.dup(d.appFd).detachFd().toLong(), mtu.toLong())
+            if (tcp443DiagnosticScope == "BROWSER_PACKET_NATIVE") {
+                mitm.Mitm.startBrowserPacketTunnel(
+                    ParcelFileDescriptor.dup(d.appFd).detachFd().toLong(),
+                    ParcelFileDescriptor.dup(d.wgLocal).detachFd().toLong(), mtu.toLong())
+            } else {
+                // Pass one owned descriptor at a time; native startup closes it on failure.
+                val wgDns = Regex("(?im)^\\s*DNS\\s*=\\s*([0-9A-Fa-f.:]+)").find(wgquick)?.groupValues?.get(1) ?: ""
+                mitm.Mitm.setWgUpstream(ParcelFileDescriptor.dup(d.wgLocal).detachFd().toLong(), mtu.toLong(), wgAddr, wgDns)
+                mitm.Mitm.startTunnel(ParcelFileDescriptor.dup(d.appFd).detachFd().toLong(), mtu.toLong())
+            }
             d.inlineEngine = true
             active = true
             AdBlockLog.add("UNIFIED_ADBLOCK_INLINE_ON addr=$wgAddr mtu=$mtu")
@@ -318,8 +324,8 @@ class UnifiedVpnService : AndroidVpnService() {
         val browserScope = includeScope && allowed.all {
             it == "com.android.chrome" || it == "com.google.android.googlequicksearchbox"
         }
-        tcp443DiagnosticScope = if (browserScope) "BROWSER_TLS_PASSTHROUGH" else "OFF"
-        AdBlockLog.add("TCP443_MODE mode=" + (if (browserScope) "BROWSER_TLS_PASSTHROUGH" else "NORMAL") +
+        tcp443DiagnosticScope = if (browserScope) "BROWSER_PACKET_NATIVE" else "OFF"
+        AdBlockLog.add("TCP443_MODE mode=" + (if (browserScope) "BROWSER_PACKET_NATIVE" else "NORMAL") +
             " tunAppScope=$mode DNS_SNI_BLOCK_ON WG_ONLY")
     }
 

@@ -389,6 +389,7 @@ func StackStats() string {
 
 // StopTunnel останавливает стек и закрывает fd (Android освободит TUN).
 func StopTunnel() {
+	StopBrowserPacketTunnel()
 	stackMu.Lock()
 	defer stackMu.Unlock()
 	if stackCounter != nil && stackCounter.fast != nil {
