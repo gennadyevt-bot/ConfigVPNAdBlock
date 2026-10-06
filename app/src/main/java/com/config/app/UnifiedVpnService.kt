@@ -328,8 +328,13 @@ class UnifiedVpnService : AndroidVpnService() {
         val browserScope = includeScope && allowed.all {
             it == "com.android.chrome" || it == "com.google.android.googlequicksearchbox"
         }
-        tcp443DiagnosticScope = if (browserScope) "BROWSER_PACKET_NATIVE" else "OFF"
-        AdBlockLog.add("TCP443_MODE mode=" + (if (browserScope) "BROWSER_PACKET_NATIVE" else "NORMAL") +
+        // App-scoped Chrome + AdBlock was routed through a raw SOCK_SEQPACKET
+        // bridge. The bridge preserved packet bytes, but Chrome could not resolve
+        // or open sites, while the same profile and AdBlock worked in global mode.
+        // Keep the Android app scope and let the established gVisor/WG path carry
+        // its packets; BrowserCompatibility still preserves Chrome's remote TLS.
+        tcp443DiagnosticScope = "OFF"
+        AdBlockLog.add("TCP443_MODE mode=" + (if (browserScope) "APP_SCOPE_GVISOR" else "NORMAL") +
             " tunAppScope=$mode DNS_SNI_BLOCK_ON WG_ONLY")
     }
 
