@@ -240,6 +240,7 @@ func (c *tunCounter) Read(p []byte) (int, error) {
 			atomic.AddInt64(&tunRxPkts, 1)
 			atomic.AddInt64(&tunRxBytes, int64(n))
 			analyzeTunPkt(p[:n])
+			appScopeTraceTCPPacket(p[:n], false)
 			raw443ObserveTunPacket(p[:n], false)
 			if c.quicDiag.outbound(p[:n]) {
 				if err != nil {
@@ -261,6 +262,7 @@ func (c *tunCounter) Read(p []byte) (int, error) {
 func (c *tunCounter) Write(p []byte) (int, error) {
 	n, err := c.f.Write(p)
 	if n > 0 {
+		appScopeTraceTCPPacket(p[:n], true)
 		atomic.AddInt64(&tunTxPkts, 1)
 		atomic.AddInt64(&tunTxBytes, int64(n))
 		raw443ObserveTunPacket(p[:n], true)
@@ -492,6 +494,8 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	host := id.LocalAddress.String()
 	port := int(id.LocalPort)
 	hp := net.JoinHostPort(host, strconv.Itoa(port))
+	client := net.JoinHostPort(id.RemoteAddress.String(), strconv.Itoa(int(id.RemotePort)))
+	appScopeTCPEvent("accepted", client, hp, "", "allow", "tcp_handler_entered")
 	// GPT: раздельные счётчики IPv4/IPv6 TCP и 443
 	isV6 := strings.Count(host, ":") > 1 // v6-литерал содержит минимум 2 двоеточия
 	if isV6 {
@@ -514,6 +518,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 	// VPN как upstream. TCP к 10.0.0.1/10.0.0.2 (Android Private DNS
 	// стучится на 10.0.0.1:853) — мгновенный отказ, без timeout-петли.
 	if host == "10.0.0.1" || host == "10.0.0.2" {
+		appScopeTCPEvent("policy", client, hp, "", "drop", "virtual_self_destination")
 		flowLog("SELF_DST_DROP dst=" + hp)
 		return
 	}
@@ -526,6 +531,7 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 		flowLog(fmt.Sprintf("tcp dst=%s fam=%s direct", hp, dfam))
 		var up net.Conn
 		var err error
+		appScopeTCPEvent("upstream_dial", client, hp, "", "allow", "non_tls_port")
 		if port == 853 {
 			// DoT: короткий дедлайн, быстрый RST -> откат на DNS через TUN.
 			up, err = dialTCPShort(hp, 2500*time.Millisecond)
@@ -533,10 +539,12 @@ func (t *tunHandler) HandleTCP(conn adapter.TCPConn) {
 			up, err = dialTCP(hp)
 		}
 		if err != nil {
+			appScopeTCPEvent("upstream_result", client, hp, "", "fail", err.Error())
 			setErr(fmt.Errorf("direct %s: %w", hp, err))
 			flowLog(hp + "→dirX")
 			return
 		}
+		appScopeTCPEvent("upstream_result", client, hp, "", "allow", "connected")
 		relay(conn, up)
 		return
 	}
@@ -1180,6 +1188,8 @@ func SNILog() string {
 // handle443 — СОБСТВЕННЫЙ MITM-пайплайн (без goproxy): полная
 // наблюдаемость всех этапов + блоклист + косметика.
 func handle443(conn adapter.TCPConn, hp string) {
+	id := conn.ID()
+	client := net.JoinHostPort(id.RemoteAddress.String(), strconv.Itoa(int(id.RemotePort)))
 	fid := atomic.AddInt64(&flowSeq, 1)
 	closeReason := "?"
 	defer func() {
@@ -1188,6 +1198,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 			flowLog(fmt.Sprintf("#%d PANIC %v", fid, r))
 		}
 		flowLog(fmt.Sprintf("#%d close=%s", fid, closeReason))
+		appScopeTCPEvent("closed", client, hp, "", "observe", closeReason)
 		_ = conn.Close()
 	}()
 	atomic.AddInt64(&acceptedN, 1)
@@ -1217,12 +1228,15 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// DoH-эндпоинты: сырой туннель без MITM (иначе "unknown certificate",
 	// т.к. клиент не доверяет нашему CA -> DNS умирает целиком)
 	if DoHHosts[hostOnly] && !diagnostic && !rawInclude {
+		appScopeTCPEvent("upstream_dial", client, hp, "", "allow", "encrypted_dns_passthrough")
 		up, err := dialTCP(hp)
 		if err != nil {
+			appScopeTCPEvent("upstream_result", client, hp, "", "fail", err.Error())
 			flowLog(fmt.Sprintf("#%d dohDial FAIL %v", fid, err))
 			closeReason = "dohDialX"
 			return
 		}
+		appScopeTCPEvent("upstream_result", client, hp, "", "allow", "connected")
 		atomic.AddInt64(&dohPassN, 1)
 		flowLog(fmt.Sprintf("#%d dohPass relay", fid))
 		closeReason = "relay"
@@ -1250,7 +1264,11 @@ func handle443(conn adapter.TCPConn, hp string) {
 	if rawFlow != nil {
 		peekConn = raw443PeekConn{conn, rawFlow}
 	}
+	appScopeTCPEvent("client_hello", client, hp, "", "observe", "reading_client_hello")
 	raw, peekSNI, alpn, perr := peekClientHello(peekConn)
+	if perr != nil {
+		appScopeTCPEvent("client_hello", client, hp, peekSNI, "observe", "parse_error: "+perr.Error())
+	}
 	if rawFlow != nil {
 		rawFlow.setHost(peekSNI)
 	}
@@ -1277,8 +1295,10 @@ func handle443(conn adapter.TCPConn, hp string) {
 		if peekSNI != "" && isDoHHost(peekSNI) {
 			dialFn = func(a string) (net.Conn, error) { return dialTCPShort(a, 2500*time.Millisecond) }
 		}
+		appScopeTCPEvent("upstream_dial", client, hp, peekSNI, "allow", tag)
 		up, err := dialFn(hp)
 		if err != nil {
+			appScopeTCPEvent("upstream_result", client, hp, peekSNI, "fail", err.Error())
 			atomic.AddInt64(&directFailN, 1)
 			if diag {
 				stage443("TCP443_DIRECT_FAIL", peekSNI, fmt.Sprintf("dst=%s stage=dial err=%v", hp, err))
@@ -1287,6 +1307,7 @@ func handle443(conn adapter.TCPConn, hp string) {
 			closeReason = tag + "X"
 			return
 		}
+		appScopeTCPEvent("upstream_result", client, hp, peekSNI, "allow", "connected")
 		if len(raw) > 0 {
 			n, werr := up.Write(raw)
 			observation.sent(true, n)
@@ -1315,12 +1336,14 @@ func handle443(conn adapter.TCPConn, hp string) {
 	// включая пустой/неполный/неизвестный ClientHello, пропускаем
 	// напрямую. Так браузеру всегда показывается настоящий сертификат.
 	if perr == nil && peekSNI != "" && isBlocked(peekSNI) {
+		appScopeTCPEvent("policy", client, hp, peekSNI, "block", "sni_blocklist")
 		atomic.AddInt64(&blockedN, 1)
 		addSNILog("BLOCK", peekSNI)
 		flowLog(fmt.Sprintf("#%d SAFE_BLOCK_SNI sni=%q dst=%s", fid, peekSNI, hp))
 		closeReason = "safeBlockSNI"
 		return
 	}
+	appScopeTCPEvent("policy", client, hp, peekSNI, "allow", "sni_not_blocked_or_unavailable")
 	if rawInclude {
 		closeReason = raw443Run(conn, raw, rawFlow)
 		return
@@ -2002,7 +2025,8 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 			resp[2] = 0x81                    // QR|RD
 			resp[3] = 0x83                    // RA + RCODE=3 (NXDOMAIN)
 			resp = append(resp, buf[12:n]...) // question как есть
-			_, _ = conn.Write(resp)
+			written, writeErr := conn.Write(resp)
+			appScopeDNSDelivery(dom, "block", resp, written, writeErr)
 			return
 		}
 		// 0.6.0-content-test2: fake-IP delivery ОТКАЧЕН — dzen снова
@@ -2016,7 +2040,8 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 				flowLog("APP_SCOPE_DNS_REPLY host=" + dom + " source=cache")
 			}
 			atomic.AddInt64(&udpCount, 1)
-			_, _ = conn.Write(cached)
+			written, writeErr := conn.Write(cached)
+			appScopeDNSDelivery(dom, "cache", cached, written, writeErr)
 			return
 		}
 		ans, err := resolveDNS(buf[:n])
@@ -2035,7 +2060,8 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 					_ = up.SetReadDeadline(time.Now().Add(4 * time.Second))
 					rbuf := make([]byte, 1500)
 					if rn, rerr := up.Read(rbuf); rerr == nil {
-						_, _ = conn.Write(rbuf[:rn])
+						written, writeErr := conn.Write(rbuf[:rn])
+						appScopeDNSDelivery(dom, "failsafe", rbuf[:rn], written, writeErr)
 					}
 				}
 				_ = up.Close()
@@ -2048,7 +2074,8 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		}
 		dnsCachePut(key, ans)
 		atomic.AddInt64(&udpCount, 1)
-		_, _ = conn.Write(ans)
+		written, writeErr := conn.Write(ans)
+		appScopeDNSDelivery(dom, "upstream", ans, written, writeErr)
 		return
 	}
 

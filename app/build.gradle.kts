@@ -11,8 +11,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Reserve a higher update code for devices with unpublished PC builds (100+).
-        versionCode = 1003
-        versionName = "6.0.0-alpha105"
+        versionCode = 1004
+        versionName = "6.0.0-alpha106"
         ndk {
             abiFilters += "arm64-v8a"
         }
