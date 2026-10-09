@@ -1985,9 +1985,16 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 	}
 
 	if isDNS {
+		dom := dnsQueryDomain(buf[:n])
+		blocked := dom != "" && isBlocked(dom)
+		// Log allowed queries too, before the DNS cache/upstream and before
+		// returning a block response. Absence of DNS_BLOCK is not absence of DNS.
+		if AppScopeContentAllowlistEnabled() {
+			flowLog(fmt.Sprintf("APP_SCOPE_DNS_QUERY host=%q blocked=%t dst=%s:53", dom, blocked, id.LocalAddress.String()))
+		}
 		// 0.5.77 DNS_ONLY (GPT): домен в блок-листе -> NXDOMAIN,
 		// без кэша и без upstream-резолва
-		if dom := dnsQueryDomain(buf[:n]); dom != "" && isBlocked(dom) {
+		if blocked {
 			atomic.AddInt64(&blockedN, 1)
 			flowLog("DNS_BLOCK " + dom)
 			resp := make([]byte, 12)
@@ -2000,17 +2007,23 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 		}
 		// 0.6.0-content-test2: fake-IP delivery ОТКАЧЕН — dzen снова
 		// получает обычные реальные DNS-ответы
-		if dom := dnsQueryDomain(buf[:n]); dom != "" {
+		if dom != "" {
 			addDNSAllow(dom)
 		}
 		key := string(buf[:n])
 		if cached, ok := dnsCacheGet(key); ok {
+			if AppScopeContentAllowlistEnabled() {
+				flowLog("APP_SCOPE_DNS_REPLY host=" + dom + " source=cache")
+			}
 			atomic.AddInt64(&udpCount, 1)
 			_, _ = conn.Write(cached)
 			return
 		}
 		ans, err := resolveDNS(buf[:n])
 		if err != nil {
+			if AppScopeContentAllowlistEnabled() {
+				flowLog(fmt.Sprintf("APP_SCOPE_DNS_ERROR host=%q err=%v", dom, err))
+			}
 			// FAIL-SAFE (GPT 0.5.66): собственный резолвер весь упал
 			// (DoT/DoH/UDP). Не оставляем браузер без DNS — пересылаем
 			// ОРИГИНАЛЬНЫЙ запрос напрямую его получателю (DNS оператора
@@ -2030,6 +2043,9 @@ func (t *tunHandler) HandleUDP(conn adapter.UDPConn) {
 			return
 		}
 		recordDNSAnswers(buf[:n], ans)
+		if AppScopeContentAllowlistEnabled() {
+			flowLog("APP_SCOPE_DNS_REPLY host=" + dom + " source=upstream")
+		}
 		dnsCachePut(key, ans)
 		atomic.AddInt64(&udpCount, 1)
 		_, _ = conn.Write(ans)

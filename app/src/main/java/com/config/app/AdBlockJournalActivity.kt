@@ -76,6 +76,7 @@ class AdBlockJournalActivity : AppCompatActivity() {
             sb.append("stackStats=").append(timed { mitm.Mitm.stackStats() }).append("\n")
             sb.append("tunStats=").append(timed { mitm.Mitm.tunStats() }).append("\n")
             sb.append("quicMode=").append(timed { mitm.Mitm.quicMode() }).append("\n")
+            sb.append("appScopeContentAllowlistEnabled=").append(timed { mitm.Mitm.appScopeContentAllowlistEnabled().toString() }).append("\n")
             sb.append("quicIncludeDropStats=").append(timed { mitm.Mitm.quicIncludeDropStats() }).append("\n")
             sb.append("lastQuicDropAt=").append(timed { mitm.Mitm.lastQuicDropAt() }).append("\n")
             sb.append("lastTcp443AfterQuicDropAt=").append(timed { mitm.Mitm.lastTcp443AfterQuicDropAt() }).append("\n")

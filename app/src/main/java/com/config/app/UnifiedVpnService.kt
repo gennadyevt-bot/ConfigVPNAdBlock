@@ -327,6 +327,7 @@ class UnifiedVpnService : AndroidVpnService() {
         mitm.Mitm.setBrowserCompatibility(mode, allowed.joinToString(","))
         val adBlockEnabled = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
             .getBoolean("adblock_enabled", false) && UnifiedAdBlock.running && UnifiedAdBlock.ready
+        mitm.Mitm.setAppScopeContentAllowlist(mode, allowed.joinToString(","), adBlockEnabled)
         val dropQuic = AppVpnQuicPolicy.shouldDrop(mode, allowed, adBlockEnabled)
         mitm.Mitm.setQuicIncludeDiagnostic(
             if (dropQuic) "INCLUDE" else "OFF",
@@ -357,7 +358,7 @@ class UnifiedVpnService : AndroidVpnService() {
         // a different service instance.
         val d = dp ?: return
         active = false
-        runCatching { mitm.Mitm.setBrowserCompatibility("OFF", ""); mitm.Mitm.stopQuicIncludeDiagnostic(); mitm.Mitm.setTcp443RawInclude(false); mitm.Mitm.setDirect443(false); mitm.Mitm.setDirect443Scope(null) }
+        runCatching { mitm.Mitm.setAppScopeContentAllowlist("OFF", "", false); mitm.Mitm.setBrowserCompatibility("OFF", ""); mitm.Mitm.stopQuicIncludeDiagnostic(); mitm.Mitm.setTcp443RawInclude(false); mitm.Mitm.setDirect443(false); mitm.Mitm.setDirect443Scope(null) }
         tcp443DiagnosticScope = "OFF"
         AdBlockLog.add("DATAPATH_STOP reason=$reason")
         runCatching {
