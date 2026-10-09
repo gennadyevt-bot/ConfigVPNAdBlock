@@ -3,6 +3,7 @@ package mitm
 import (
 	"bufio"
 	"configadblock/mitm/internal/quicfast"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -186,8 +187,26 @@ func NetSelfTest() {
 }
 
 func tlsDial(addr, serverName string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 5 * time.Second, Control: protectedControl()}
-	return tls.DialWithDialer(&d, "tcp", addr, &tls.Config{ServerName: serverName})
+	return tlsDialTimeout(addr, serverName, 5*time.Second)
+}
+
+// DoT and DoH must use the same WireGuard upstream as website TCP.
+// Protecting an OS socket excludes it from Android VPN; it does not send
+// it through our tunnel. dialTCPShort retains protected OS dialing only
+// when the WireGuard upstream is inactive.
+func tlsDialTimeout(addr, serverName string, timeout time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	conn, err := dialTCPShort(addr, timeout)
+	if err != nil {
+		return nil, err
+	}
+	secured := tls.Client(conn, &tls.Config{ServerName: serverName})
+	if err := secured.HandshakeContext(ctx); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return secured, nil
 }
 
 // --- Диагностика нижнего уровня TUN (GPT) ---

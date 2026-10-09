@@ -10,8 +10,8 @@ android {
         applicationId = "com.config.vpnadblock"
         minSdk = 26
         targetSdk = 36
-        versionCode = 86
-        versionName = "6.0.0-alpha86"
+        versionCode = 87
+        versionName = "6.0.0-alpha87"
         ndk {
             abiFilters += "arm64-v8a"
         }

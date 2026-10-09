@@ -3,6 +3,9 @@ on:
   push:
     branches: [ integration-unified-adblock ]
   workflow_dispatch:
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -29,7 +32,7 @@ jobs:
         run: |
           mkdir -p app/libs
           cp mitm/mitm.aar app/libs/mitm.aar
-      - run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+      - run: ./gradlew :app:testDebugUnitTest assembleDebug :app:assembleRelease --no-daemon --stacktrace
       - name: Verify arm64-only APK
         run: |
           python3 - <<'PYAPK'
