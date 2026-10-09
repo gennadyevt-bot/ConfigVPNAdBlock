@@ -10,8 +10,9 @@ android {
         applicationId = "com.config.vpnadblock"
         minSdk = 26
         targetSdk = 36
-        versionCode = 87
-        versionName = "6.0.0-alpha87"
+        // Reserve a higher update code for devices with unpublished PC builds (100+).
+        versionCode = 1000
+        versionName = "6.0.0-alpha88"
         ndk {
             abiFilters += "arm64-v8a"
         }

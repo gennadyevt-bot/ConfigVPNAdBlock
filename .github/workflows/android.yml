@@ -33,6 +33,11 @@ jobs:
           mkdir -p app/libs
           cp mitm/mitm.aar app/libs/mitm.aar
       - run: ./gradlew :app:testDebugUnitTest assembleDebug :app:assembleRelease --no-daemon --stacktrace
+      - name: Verify release APK signature
+        run: |
+          SIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner -type f | sort -V | tail -1)
+          test -n "$SIGNER"
+          "$SIGNER" verify --verbose --print-certs app/build/outputs/apk/release/*.apk
       - name: Verify arm64-only APK
         run: |
           python3 - <<'PYAPK'
