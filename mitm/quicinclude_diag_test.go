@@ -78,6 +78,9 @@ func TestQuicIncludeIsolationAndStopRetention(t *testing.T) {
 		{"INCLUDE", "com.google.android.youtube", false},
 		{"INCLUDE", "com.android.chrome,com.google.android.youtube", false},
 		{"INCLUDE", "com.android.chrome,other.app", false},
+		{"OFF", "com.android.chrome", false},
+		{"INCLUDE", "com.android.chrome,", false},
+		{"INCLUDE", " ", false},
 	} {
 		t.Run(tc.mode+tc.apps, func(t *testing.T) {
 			SetQuicIncludeDiagnostic(tc.mode, tc.apps)
@@ -94,7 +97,7 @@ func TestQuicIncludeIsolationAndStopRetention(t *testing.T) {
 				t.Fatal("DNS intercepted")
 			}
 			if tc.drop {
-				if s.packets.Load() != 2 || s.flows.Load() != 2 || LastQuicDropAt() == "0" || QuicMode() != "DROP_INCLUDE_DIAG" {
+				if s.packets.Load() != 2 || s.flows.Load() != 2 || LastQuicDropAt() == "0" || QuicMode() != "DROP" {
 					t.Fatal(QuicIncludeDropStats())
 				}
 				StopQuicIncludeDiagnostic()
@@ -102,7 +105,7 @@ func TestQuicIncludeIsolationAndStopRetention(t *testing.T) {
 					t.Fatal("STOP reset counters")
 				}
 			} else if QuicMode() != "NORMAL" || s.packets.Load() != 0 {
-				t.Fatal("non-browser session changed")
+				t.Fatal("inactive or non-INCLUDE session changed")
 			}
 		})
 	}
@@ -197,6 +200,9 @@ func TestQuicIncludeSNILogAndTCPLink(t *testing.T) {
 	flowMu.Unlock()
 	if !strings.Contains(logs, "TCP443_AFTER_QUIC_DROP") || !strings.Contains(logs, "mapped_port=0 reason=force_tcp_fallback") {
 		t.Fatal(logs)
+	}
+	if !strings.Contains(logs, "QUIC_INCLUDE_DROP_PACKETS=1") {
+		t.Fatal("drop log missing counters")
 	}
 	// RAW relay still carries sustained bytes in this mode; DROP has no TCP effect.
 	app, up, flow, done := rawTestRelay(t)

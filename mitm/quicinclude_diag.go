@@ -12,8 +12,9 @@ import (
 )
 
 // A captured session belongs to exactly one established TUN. No UID/foreground
-// detection. Restrict this experiment to browser-only INCLUDE lists: a session
-// containing YouTube (or another package) keeps its normal QUIC fast path.
+// detection. Android's INCLUDE Builder selects apps before packets reach this
+// TUN. Keep normal QUIC for YouTube and mixed lists: without per-packet UID
+// metadata the existing drop cannot isolate Chrome within a shared TUN.
 type quicIncludeDropFlow struct {
 	inspector quicfast.DiagnosticHello
 	host      string
@@ -54,7 +55,7 @@ func StopQuicIncludeDiagnostic() {
 }
 func QuicMode() string {
 	if s := quicIncludeCurrent.Load(); s != nil && s.active.Load() {
-		return "DROP_INCLUDE_DIAG"
+		return "DROP"
 	}
 	return "NORMAL"
 }
@@ -145,7 +146,7 @@ func (s *quicIncludeDropSession) outbound(b []byte) bool {
 	}
 	s.mu.Unlock()
 	if first || changed {
-		flowLog(fmt.Sprintf("QUIC_INCLUDE_DROP dst=%s host=%q client=%s mapped_port=0 reason=force_tcp_fallback", dst, name, client))
+		flowLog(fmt.Sprintf("QUIC_INCLUDE_DROP dst=%s host=%q client=%s mapped_port=0 reason=force_tcp_fallback %s", dst, name, client, QuicIncludeDropStats()))
 	}
 	return true
 }

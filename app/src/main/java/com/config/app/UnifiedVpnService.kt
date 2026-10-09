@@ -316,7 +316,8 @@ class UnifiedVpnService : AndroidVpnService() {
     }
 
     // Use the Builder scope that successfully established this TUN.
-    // Browser-only scopes preserve remote TLS and normal QUIC transport.
+    // This datapath starts only for AdBlock. Drop UDP/443 only in an
+    // established INCLUDE TUN; Android excludes all non-selected apps.
     private fun configureTCP443Diagnostic(mode: String, allowed: List<String>) {
         mitm.Mitm.setDirect443(false)
         mitm.Mitm.setDirect443Scope(null)
@@ -324,7 +325,13 @@ class UnifiedVpnService : AndroidVpnService() {
         val includeScope = mode == "INCLUDE" && allowed.isNotEmpty()
         mitm.Mitm.setTcp443RawInclude(false)
         mitm.Mitm.setBrowserCompatibility(mode, allowed.joinToString(","))
-        mitm.Mitm.setQuicIncludeDiagnostic("OFF", "")
+        val adBlockEnabled = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            .getBoolean("adblock_enabled", false) && UnifiedAdBlock.running && UnifiedAdBlock.ready
+        val dropQuic = AppVpnQuicPolicy.shouldDrop(mode, allowed, adBlockEnabled)
+        mitm.Mitm.setQuicIncludeDiagnostic(
+            if (dropQuic) "INCLUDE" else "OFF",
+            if (dropQuic) allowed.joinToString(",") else ""
+        )
         val browserScope = includeScope && allowed.all {
             it == "com.android.chrome" || it == "com.google.android.googlequicksearchbox"
         }
