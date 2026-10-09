@@ -199,6 +199,11 @@ func isBlocked(host string) bool {
 	if i := strings.LastIndex(d, ":"); i >= 0 {
 		d = d[:i] // отрезаем порт
 	}
+	// Apply the same scoped decision to DNS, TLS SNI and QUIC SNI.
+	if browserContentAllowed(d) {
+		flowLog("APP_SCOPE_CONTENT_ALLOW host=" + d)
+		return false
+	}
 	for d != "" {
 		blockedMu.RLock()
 		hit := blockedDomains[d]
